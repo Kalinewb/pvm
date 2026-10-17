@@ -23,9 +23,10 @@ set -o pipefail
 umask 077
 export LC_ALL=C.UTF-8
 
-VERSION="3.0.1"
+VERSION="3.0.2"
 BIN_DIR=${PVM_BIN_DIR:-/usr/local/sbin}
 REPO_RAW=${PVM_RAW:-https://raw.githubusercontent.com/Kalinewb/pvm}
+REPO_API=${PVM_API:-https://api.github.com/repos/Kalinewb/pvm}
 SELF=$(readlink -f "$0" 2>/dev/null || echo "$0")
 ETC=${PVM_ETC:-/etc/pvm}
 VARD=${PVM_VAR:-/var/lib/pvm}
@@ -4248,6 +4249,14 @@ migrate_old() {
     fi
 }
 
+# fetch_release REF FILE OUT : a file from dist/ of the repository. The API is asked first because raw.githubusercontent.com
+# caches for 5 minutes and ignores query strings, which can hand back the previous version right after a release.
+fetch_release() {
+    local ref=$1 f=$2 out=$3
+    if [ -z "${PVM_RAW:-}" ] && curl -fsSL -m 60 -H 'Accept: application/vnd.github.raw' "$REPO_API/contents/dist/$f?ref=$ref" -o "$out" 2>/dev/null; then return 0; fi
+    curl -fsSL -m 60 "$REPO_RAW/$ref/dist/$f" -o "$out"
+}
+
 # pvm update [--check] [ref] : fetch the latest release, verify its checksum, install it
 update_self() {
     local check=0 ref=main tmp want have newv oldv dest=$BIN_DIR/pvm
@@ -4256,10 +4265,8 @@ update_self() {
     tmp=$(mktemp -d) || die "could not create a temp dir"
     # shellcheck disable=SC2064
     trap "rm -rf '$tmp'" RETURN
-    # a changing query string keeps GitHub's cache from handing out an older copy
-    local bust; bust="?t=$(date +%s)"
-    curl -fsSL -m 60 "$REPO_RAW/$ref/dist/pvm.sh$bust" -o "$tmp/s" || die "could not download the latest version (no internet, or no such version: $ref)"
-    curl -fsSL -m 30 "$REPO_RAW/$ref/dist/pvm.sh.sha256$bust" -o "$tmp/s.sha" || die "could not download the checksum"
+    fetch_release "$ref" pvm.sh "$tmp/s" || die "could not download the latest version (no internet, or no such version: $ref)"
+    fetch_release "$ref" pvm.sh.sha256 "$tmp/s.sha" || die "could not download the checksum"
     want=$(cut -d' ' -f1 "$tmp/s.sha"); have=$(sha256sum "$tmp/s" | cut -d' ' -f1)
     [ "$want" = "$have" ] || die "checksum mismatch, nothing was changed"
     head -n 1 "$tmp/s" | grep -q '^#!/bin/bash' && bash -n "$tmp/s" || die "the download is not a valid script, nothing was changed"

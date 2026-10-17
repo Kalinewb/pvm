@@ -10,6 +10,7 @@ REF=${PVM_REF:-main}
 BIN=/usr/local/sbin
 DEST=$BIN/pvm
 RAW=https://raw.githubusercontent.com/$REPO/$REF/dist
+API=https://api.github.com/repos/$REPO/contents/dist
 
 die() { printf '\n  ✘ %s\n\n' "$*" >&2; exit 1; }
 
@@ -31,8 +32,10 @@ command -v pct >/dev/null 2>&1 || die "pct not found: run this on the Proxmox ho
 command -v curl >/dev/null 2>&1 || die "curl is needed"
 
 tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
-curl -fsSL "$RAW/pvm.sh?t=$(date +%s)" -o "$tmp/pvm.sh" || die "could not download $RAW/pvm.sh"
-curl -fsSL "$RAW/pvm.sh.sha256?t=$(date +%s)" -o "$tmp/pvm.sh.sha256" || die "could not download the checksum"
+# the API first: raw.githubusercontent.com caches for 5 minutes and could hand back the previous release
+get() { curl -fsSL -H 'Accept: application/vnd.github.raw' "$API/$1?ref=$REF" -o "$2" 2>/dev/null || curl -fsSL "$RAW/$1" -o "$2"; }
+get pvm.sh "$tmp/pvm.sh" || die "could not download pvm.sh"
+get pvm.sh.sha256 "$tmp/pvm.sh.sha256" || die "could not download the checksum"
 
 want=$(cut -d' ' -f1 "$tmp/pvm.sh.sha256")
 have=$(sha256sum "$tmp/pvm.sh" | cut -d' ' -f1)

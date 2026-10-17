@@ -23,9 +23,10 @@ set -o pipefail
 umask 077
 export LC_ALL=C.UTF-8
 
-VERSION="3.0.1"
+VERSION="3.0.2"
 BIN_DIR=${PVM_BIN_DIR:-/usr/local/sbin}
 REPO_RAW=${PVM_RAW:-https://raw.githubusercontent.com/Kalinewb/pvm}
+REPO_API=${PVM_API:-https://api.github.com/repos/Kalinewb/pvm}
 SELF=$(readlink -f "$0" 2>/dev/null || echo "$0")
 ETC=${PVM_ETC:-/etc/pvm}
 VARD=${PVM_VAR:-/var/lib/pvm}
