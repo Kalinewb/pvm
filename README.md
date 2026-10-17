@@ -31,6 +31,7 @@ Requirements: Proxmox VE (developed and tested on 9.x), containers running Debia
     vpn-lxc status 126   full leak / kill-switch check of one container
     vpn-lxc switch 126 backup
     vpn-lxc watchdog     one watchdog round (a systemd timer runs this every 2 minutes)
+    vpn-lxc update       install the latest version (update --check only looks)
 
 ## Two modes
 
