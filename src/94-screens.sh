@@ -45,7 +45,7 @@ switch_screen() {
     yn a "Switch to the $other config?" y || return 0
     [ "$a" = y ] || return 0
     run_task "switching CT $id to $other" cexec "$id" /usr/local/sbin/vpnguard-switch "$other" \
-        && notify "$(reg_get "$id" NAME): switched to $other" "Switched by hand from the vpn-lxc menu." 2 repeat
+        && notify "$(reg_get "$id" NAME): switched to $other" "Switched by hand from the pvm menu." 2 repeat
     pause
 }
 
@@ -113,7 +113,7 @@ settings_screen() {
         fa=$(set_get WD_FAILOVER_AFTER); fa=${fa:-4}
         nk=$(set_get NOTIFY_KIND); nk=${nk:-none}
         timer="${ER}not installed${R}"
-        systemctl is-active --quiet vpn-lxc-watchdog.timer 2>/dev/null && timer="${OK}running${R}"
+        systemctl is-active --quiet pvm-watchdog.timer 2>/dev/null && timer="${OK}running${R}"
         box_top "Now"
         box_row "${GR}Watchdog${R}         $([ "$wd" = 1 ] && echo "${OK}on${R}" || echo "${ER}off${R}") · timer $timer"
         box_row "${GR}Restart after${R}    $ra failed checks ($((ra * 2)) min)"
@@ -132,7 +132,7 @@ settings_screen() {
         case $a in
             toggle)
                 if [ "$wd" = 1 ]; then
-                    set_set WATCHDOG 0; systemctl disable --now vpn-lxc-watchdog.timer >/dev/null 2>&1; ok "watchdog off"
+                    set_set WATCHDOG 0; systemctl disable --now pvm-watchdog.timer >/dev/null 2>&1; ok "watchdog off"
                 else
                     set_set WATCHDOG 1; run_task "installing the watchdog timer" install_watchdog
                 fi
@@ -155,7 +155,7 @@ settings_screen() {
                         field url "ntfy server" "$(set_get NOTIFY_URL | grep . || echo https://ntfy.sh)" v_url || continue
                         [ -z "$url" ] && url=https://ntfy.sh
                         set_set NOTIFY_KIND ntfy
-                        field topic "Topic (long and random if you use ntfy.sh)" "$(set_get NOTIFY_TOPIC | grep . || echo "vpn-lxc-$(tr -dc a-z0-9 < /dev/urandom | head -c 10)")" v_name || continue
+                        field topic "Topic (long and random if you use ntfy.sh)" "$(set_get NOTIFY_TOPIC | grep . || echo "pvm-$(tr -dc a-z0-9 < /dev/urandom | head -c 10)")" v_name || continue
                         secret token "Access token (optional, ⏎ to skip)"
                         set_set NOTIFY_URL "$url"; set_set NOTIFY_TOPIC "$topic"; set_set NOTIFY_TOKEN "$token"
                         note "subscribe to $topic in the ntfy app" ;;
@@ -168,7 +168,7 @@ settings_screen() {
                 pause ;;
             test)
                 if [ "$nk" = none ]; then warn "notifications are off: pick ntfy or Gotify first"
-                elif run_task "sending a test" notify "vpn-lxc test" "Notifications from $(hostname) work." 3 white_check_mark; then ok "check your phone"
+                elif run_task "sending a test" notify "pvm test" "Notifications from $(hostname) work." 3 white_check_mark; then ok "check your phone"
                 else bad "it didn't go through: check the server, topic and token"; fi
                 pause ;;
             library) library_screen ;;
@@ -228,11 +228,11 @@ remove_screen() {
 
 remove_bridge() {
     local br=$1 tmp
-    cp -a "$IFACES_FILE" "$IFACES_FILE.vpn-lxc.$(date +%Y%m%d-%H%M%S)"
+    cp -a "$IFACES_FILE" "$IFACES_FILE.pvm.$(date +%Y%m%d-%H%M%S)"
     tmp=$(mktemp)
     awk -v br="$br" '
         $1 == "auto" && $2 == br { skip = 1; if (held > 0) held--; next }   # also drops the blank line we added in front of it
-        skip && /^#VPN-only network \(vpn-lxc.sh\)/ { skip = 0; next }
+        skip && /^#VPN-only network \((PVM|vpn-lxc.sh)\)/ { skip = 0; next }
         skip && ($0 ~ /^iface / || $0 ~ /^[ \t]/ || $0 == "") { next }
         $0 == "" { held++; next }
         { skip = 0; while (held > 0) { print ""; held-- } print }

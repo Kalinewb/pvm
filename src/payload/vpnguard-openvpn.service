@@ -1,5 +1,5 @@
 [Unit]
-Description=OpenVPN tunnel (vpn-lxc.sh)
+Description=OpenVPN tunnel (PVM)
 Wants=network-online.target
 After=network-online.target nftables.service
 Requires=nftables.service

@@ -4,9 +4,9 @@
 <radialGradient id="glow2" cx="0.95" cy="1" r="0.8"><stop offset="0" stop-color="#4a2a5f" stop-opacity="0.7"/><stop offset="1" stop-color="#0d1117" stop-opacity="0"/></radialGradient></defs>
 <rect width="1280" height="640" fill="#0d1117"/><rect width="1280" height="640" fill="url(#glow)"/><rect width="1280" height="640" fill="url(#glow2)"/>
 <g transform="translate(110,120)"><path d="M70 0 L140 26 V84 C140 130 108 160 70 176 C32 160 0 130 0 84 V26 Z" fill="none" stroke="url(#g)" stroke-width="7" stroke-linejoin="round"/><path d="M44 84 L64 106 L100 62" fill="none" stroke="url(#g)" stroke-width="9" stroke-linecap="round" stroke-linejoin="round"/></g>
-<text x="290" y="205" font-family="ui-monospace, 'JetBrains Mono', 'DejaVu Sans Mono', 'Liberation Mono', Menlo, Consolas, monospace" font-size="104" font-weight="800" fill="url(#g)">vpn-lxc</text>
-<text x="294" y="262" font-size="34" fill="#e6edf3" font-weight="600">A VPN dashboard for your Proxmox containers.</text>
-<text x="294" y="306" font-size="23" fill="#8b949e">Kill switch included. Set it up once, it keeps itself working.</text>
+<text x="290" y="205" font-family="ui-monospace, 'JetBrains Mono', 'DejaVu Sans Mono', 'Liberation Mono', Menlo, Consolas, monospace" font-size="104" font-weight="800" fill="url(#g)">PVM</text>
+<text x="294" y="262" font-size="34" fill="#e6edf3" font-weight="600">Proxmox VPN Manager</text>
+<text x="294" y="306" font-size="21" fill="#8b949e">A VPN dashboard for your containers. Kill switch included. Set it up once, it keeps itself working.</text>
 <rect x="110" y="372" width="257.79999999999995" height="42" rx="21" fill="#161b22" stroke="#30363d"/>
 <text x="238.89999999999998" y="399" text-anchor="middle" font-size="18" fill="#e6edf3">WireGuard · OpenVPN</text>
 <rect x="381.79999999999995" y="372" width="160.2" height="42" rx="21" fill="#161b22" stroke="#30363d"/>
@@ -17,9 +17,9 @@
 <text x="871.3" y="399" text-anchor="middle" font-size="18" fill="#e6edf3">port forwarding</text>
 <rect x="110" y="430" width="257.79999999999995" height="42" rx="21" fill="#161b22" stroke="#30363d"/>
 <text x="238.89999999999998" y="457" text-anchor="middle" font-size="18" fill="#e6edf3">watchdog + failover</text>
-<rect x="381.79999999999995" y="430" width="257.79999999999995" height="42" rx="21" fill="#161b22" stroke="#30363d"/>
-<text x="510.69999999999993" y="457" text-anchor="middle" font-size="18" fill="#e6edf3">arrow-key dashboard</text>
+<rect x="381.79999999999995" y="430" width="318.79999999999995" height="42" rx="21" fill="#161b22" stroke="#30363d"/>
+<text x="541.1999999999999" y="457" text-anchor="middle" font-size="18" fill="#e6edf3">pvm or vpn, any capitals</text>
 <rect x="110" y="520" width="1060" height="62" rx="12" fill="#161b22" stroke="#30363d"/>
 <text x="136" y="559" font-family="ui-monospace, 'JetBrains Mono', 'DejaVu Sans Mono', 'Liberation Mono', Menlo, Consolas, monospace" font-size="21" fill="#5fff87">$</text>
-<text x="164" y="559" font-family="ui-monospace, 'JetBrains Mono', 'DejaVu Sans Mono', 'Liberation Mono', Menlo, Consolas, monospace" font-size="19" fill="#e6edf3">curl -fsSL https://raw.githubusercontent.com/Kalinewb/vpn-lxc/main/install.sh | bash</text>
+<text x="164" y="559" font-family="ui-monospace, 'JetBrains Mono', 'DejaVu Sans Mono', 'Liberation Mono', Menlo, Consolas, monospace" font-size="19" fill="#e6edf3">curl -fsSL https://raw.githubusercontent.com/Kalinewb/pvm/main/install.sh | bash</text>
 </svg>

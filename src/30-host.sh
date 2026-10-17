@@ -5,13 +5,13 @@ STAGE=""
 cleanup() { screen_leave; cur_show; rm -f "$CT_CACHE" "$CT_CACHE.tmp"; [ -n "$STAGE" ] && rm -rf "$STAGE"; return 0; }
 trap cleanup EXIT
 trap 'exit 130' INT TERM HUP   # closing the terminal must still clean the temp dir (it can hold configs)
-new_stage() { [ -n "$STAGE" ] && return 0; STAGE=$(mktemp -d /tmp/vpn-lxc.XXXXXX) || die "could not create a temp dir"; }
+new_stage() { [ -n "$STAGE" ] && return 0; STAGE=$(mktemp -d /tmp/pvm.XXXXXX) || die "could not create a temp dir"; }
 
 cexec()      { local ct=$1; shift; pct exec "$ct" -- "$@"; }
 cpush()      { pct push "$1" "$2" "$3" --perms "${4:-600}" --user 0 --group 0 >/dev/null; }
 # One `pct list` serves every status/name lookup for 2 seconds. Asking pct per
 # container costs ~0.5s each, which made the pickers hang for half a minute.
-CT_CACHE=/tmp/.vpn-lxc-ct.$$
+CT_CACHE=/tmp/.pvm-ct.$$
 ct_table() {
     local now mt
     now=$(printf '%(%s)T' -1)

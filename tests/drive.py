@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Drive vpn-lxc.sh in a pseudo terminal and print what each step shows.
+"""Drive PVM in a pseudo terminal and print what each step shows.
 usage: drive.py COLS ROWS [-s script] ITEM...
   ITEM  <up> <down> <left> <right> <enter> <space> <esc> <tab>   one key, no newline
         ~text                                                    typed characters, no newline
@@ -14,7 +14,7 @@ KEYS = {"<up>":"\x1b[A","<down>":"\x1b[B","<right>":"\x1b[C","<left>":"\x1b[D","
 idle = float(os.environ.get("IDLE", "1.5"))
 pid, fd = pty.fork()
 if pid == 0:
-    os.environ.update(TERM="xterm-256color", COLORTERM="truecolor", VPNLXC_ANIM="0", COLUMNS=str(cols), LINES=str(rows))
+    os.environ.update(TERM="xterm-256color", COLORTERM="truecolor", PVM_ANIM="0", COLUMNS=str(cols), LINES=str(rows))
     os.execvp("bash", ["bash", script])
 fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
 def drain(t):

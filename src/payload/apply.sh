@@ -1,5 +1,5 @@
 #!/bin/bash
-# Runs inside the container, started by vpn-lxc.sh on the Proxmox host.
+# Runs inside the container, started by PVM on the Proxmox host.
 # Prints "STEP/WARN/FAIL/RESULT text" lines that the host draws as a checklist.
 umask 022   # the host script runs with 077 and pct exec passes it on
 set -uo pipefail
@@ -52,7 +52,7 @@ fi
 # one target that means "the tunnel is up", whatever the protocol
 cat > /etc/systemd/system/vpnguard-tunnel.target <<EOF
 [Unit]
-Description=VPN tunnel is up (vpn-lxc.sh)
+Description=VPN tunnel is up (PVM)
 BindsTo=$UNIT
 PartOf=$UNIT
 After=$UNIT
@@ -67,7 +67,7 @@ if [ "$PROTO" = openvpn ]; then
     rm -rf /etc/systemd/system/wg-quick@wg0.service.d
 else
     install -d -m 755 "/etc/systemd/system/wg-quick@$VPN_IF.service.d"
-    printf '# vpn-lxc.sh: the firewall is always up before the tunnel.\n[Unit]\nRequires=nftables.service\nAfter=nftables.service\nWants=vpnguard-tunnel.target\n' \
+    printf '# PVM: the firewall is always up before the tunnel.\n[Unit]\nRequires=nftables.service\nAfter=nftables.service\nWants=vpnguard-tunnel.target\n' \
         > "/etc/systemd/system/wg-quick@$VPN_IF.service.d/vpnguard.conf"
     if [ -e /etc/systemd/system/vpnguard-openvpn.service ]; then
         systemctl disable --now vpnguard-openvpn >/dev/null 2>&1
@@ -84,7 +84,7 @@ for dd in /etc/systemd/system/*.service.d/vpnguard-app.conf; do
 done
 for a in $APPS; do
     install -d -m 755 "/etc/systemd/system/$a.d"
-    printf '# vpn-lxc.sh: only run while the VPN tunnel is up.\n[Unit]\nBindsTo=vpnguard-tunnel.target\nAfter=vpnguard-tunnel.target\nPartOf=vpnguard-tunnel.target\n' \
+    printf '# PVM: only run while the VPN tunnel is up.\n[Unit]\nBindsTo=vpnguard-tunnel.target\nAfter=vpnguard-tunnel.target\nPartOf=vpnguard-tunnel.target\n' \
         > "/etc/systemd/system/$a.d/vpnguard-app.conf"
 done
 

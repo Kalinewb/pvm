@@ -1,5 +1,5 @@
 #!/bin/bash
-# vpn-status: tunnel, leak and kill switch check. Installed by vpn-lxc.sh.
+# vpn-status: tunnel, leak and kill switch check. Installed by PVM.
 #   vpn-status            full screen
 #   vpn-status --brief    KEY=value summary for the dashboard
 #   vpn-status --health   quick health check for the watchdog (no outside lookups)
@@ -147,7 +147,7 @@ EOF
     printf '   %s%s  ·  %s%s\n' "$GREY" "$(hostname)" "$(date '+%Y-%m-%d %H:%M:%S')" "$RESET"
 }
 
-[ -f "$ENV" ] || echo "note: $ENV not found, using defaults (was vpn-lxc.sh run on this container?)"
+[ -f "$ENV" ] || echo "note: $ENV not found, using defaults (was PVM run on this container?)"
 banner
 RETRY=1 fetch "probing the exit node..." "$TMP/exit" -4 https://ipinfo.io/json
 [ "$PROVIDER" = mullvad ] && RETRY=1 fetch "asking Mullvad..." "$TMP/mullvad" -4 https://am.i.mullvad.net/json

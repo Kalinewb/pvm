@@ -1,9 +1,9 @@
 #!/bin/bash
-# Function-level tests for vpn-lxc.sh. Changes nothing outside a temp dir.
-#   bash tests/unit.sh [path/to/vpn-lxc.sh]       (needs nft for the firewall checks; run it on the Proxmox host)
-SCRIPT=${1:-$(dirname "$0")/../dist/vpn-lxc.sh}
+# Function-level tests for PVM. Changes nothing outside a temp dir.
+#   bash tests/unit.sh [path/to/PVM]       (needs nft for the firewall checks; run it on the Proxmox host)
+SCRIPT=${1:-$(dirname "$0")/../dist/pvm.sh}
 T=$(mktemp -d); trap 'rm -rf "$T"' EXIT
-export NO_COLOR=1 VPNLXC_ETC=$T/etc VPNLXC_VAR=$T/var
+export NO_COLOR=1 PVM_ETC=$T/etc PVM_VAR=$T/var
 grep -v '^main "\$@"$' "$SCRIPT" > "$T/lib.sh"
 # shellcheck disable=SC1091
 source "$T/lib.sh"
@@ -130,6 +130,20 @@ declare -A V=([lan_net]=192.168.1.0/24)
 eq "next free vpn network" "$(free_vpnnet)" "10.10.12.0/24"
 v_vpnnet 10.10.10.0/24 >/dev/null 2>&1 && bad "network of another gateway accepted" || ok
 eq "free network accepted" "$(v_vpnnet 10.10.12.0/24)" "10.10.12.0/24"
+
+
+# ── commands: pvm and vpn in any capitals ──
+eq "pvm spellings" "$(case_variants pvm | sort | tr '\n' ' ')" "PVM PVm PvM Pvm pVM pVm pvM pvm "
+eq "vpn spellings" "$(case_variants vpn | wc -l)" 8
+BIN=$T/bin; mkdir -p "$BIN"; BIN_DIR=$BIN
+printf '#!/bin/bash\necho real\n' > "$BIN/pvm"; chmod +x "$BIN/pvm"
+printf 'someone else' > "$BIN/Vpn"                     # a different program that happens to be called Vpn
+printf 'old command' > "$BIN/vpn-lxc"                  # the old name: ours to replace
+install_links 2>/dev/null
+for n in vpn VPN vPn pvm PVM Pvm; do [ -e "$BIN/$n" ] && ok || bad "missing command $n"; done
+eq "all spellings run the same file" "$(readlink -f "$BIN/VPN")" "$(readlink -f "$BIN/pvm")"
+eq "someone else's Vpn is untouched" "$(cat "$BIN/Vpn")" "someone else"
+[ -L "$BIN/vpn-lxc" ] && ok || bad "old vpn-lxc command should now be a link"
 
 echo "passed $pass, failed $failn"
 [ "$failn" = 0 ]

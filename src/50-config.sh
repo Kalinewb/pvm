@@ -56,11 +56,11 @@ wg_render() {
     }
     /^[ \t]*\[[Ii]nterface\][ \t]*$/ {
         print
-        print "# DNS is handled by vpn-lxc.sh: only ever through the tunnel"
+        print "# DNS is handled by PVM: only ever through the tunnel"
         if (dns != "") print "PostUp = /usr/local/sbin/vpnguard-dns " dns
         next
     }
-    /^# DNS is handled by vpn-lxc.sh/ { next }
+    /^# DNS is handled by (PVM|vpn-lxc.sh)/ { next }
     index($0, "=") && $0 !~ /^[ \t]*#/ {
         k = tolower(trim(substr($0, 1, index($0, "=") - 1)))
         v = trim(substr($0, index($0, "=") + 1))
@@ -83,7 +83,7 @@ ovpn_info() {
     /^[ \t]*<\/[A-Za-z-]+>/ { inblk = 0; next }
     /^[ \t]*<[A-Za-z-]+>/   { inblk = 1; if ($0 ~ /<auth-user-pass>/) inline_auth = 1; next }
     inblk { next }
-    /^# --- vpn-lxc.sh ---/ { ours = 1 }
+    /^# --- (PVM|vpn-lxc.sh) ---/ { ours = 1 }
     /^[ \t]*[#;]/ { next }
     $1 == "remote"         { nr++; rh[nr] = $2; rp[nr] = $3; rt[nr] = $4 }
     $1 == "proto"          { proto = $2 }
@@ -105,7 +105,7 @@ ovpn_info() {
 # ovpn_render SRC DST "ip:port/proto ..." "auth file path or empty"
 ovpn_render() {
     awk -v rem="$3" -v authf="$4" '
-    /^# --- vpn-lxc.sh ---/ { exit }
+    /^# --- (PVM|vpn-lxc.sh) ---/ { exit }
     /^[ \t]*<auth-user-pass>/   { skip = 1; next }
     /^[ \t]*<\/auth-user-pass>/ { skip = 0; next }
     skip { next }
@@ -115,8 +115,8 @@ ovpn_render() {
     $1 ~ /^(remote|up|down|route-up|ipchange|route-pre-down|script-security|auth-user-pass|auth-nocache|dev|dev-type|persist-tun|resolv-retry|redirect-gateway|remote-random-hostname)$/ { next }
     { print }
     END {
-        print "# --- vpn-lxc.sh ---"
-        print "# Below is managed by vpn-lxc.sh. Servers are pinned to IPs because DNS only works inside the tunnel."
+        print "# --- PVM ---"
+        print "# Below is managed by PVM. Servers are pinned to IPs because DNS only works inside the tunnel."
         n = split(rem, R, " ")
         for (i = 1; i <= n; i++) { split(R[i], a, /[:\/]/); print "remote " a[1] " " a[2] " " a[3] }
         print "dev tun0"

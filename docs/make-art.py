@@ -75,13 +75,13 @@ def dash():
         [("    ③  Live dashboard        ", "wh"), ("auto-refreshing view of everything", "gr")],
         [("    ④  Check a container     ", "wh"), ("full leak and kill-switch test", "gr")],
     ]
-    terminal("dashboard.svg", "vpn-lxc · dashboard", lines, width=1020)
+    terminal("dashboard.svg", "pvm · dashboard", lines, width=1020)
 
 
 # ───────────────────────── express setup ─────────────────────────
 def express():
     lines = [
-        [("  ◆ VPN·LXC  v2.4.1", "pk", True), ("                                                  VPN gateways", "gr")],
+        [("  ◆ PVM  v3.0.0", "pk", True), ("                                                  VPN gateways", "gr")],
         [("  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", "cy")],
         [("", "wh")],
         [("  ▍ ", "vi"), ("New VPN gateway", "wh", True)],
@@ -99,7 +99,7 @@ def express():
         [("    ✓ ", "ok"), ("tunnel up, DNS answers through it", "wh")],
         [("    ✓ ", "ok"), ("forwarded port from the VPN: ", "wh"), ("41337", "cy", True)],
     ]
-    terminal("express.svg", "vpn-lxc · Express setup", lines, width=960)
+    terminal("express.svg", "pvm · Express setup", lines, width=960)
 
 
 # ───────────────────────── architecture ─────────────────────────
@@ -162,7 +162,7 @@ def architecture():
 # ───────────────────────── hero / social preview ─────────────────────────
 def hero():
     w, h = 1280, 640
-    chips = ["WireGuard · OpenVPN", "kill switch", "named gateways", "port forwarding", "watchdog + failover", "arrow-key dashboard"]
+    chips = ["WireGuard · OpenVPN", "kill switch", "named gateways", "port forwarding", "watchdog + failover", "pvm or vpn, any capitals"]
     s = [f'<svg xmlns="http://www.w3.org/2000/svg" width="{w}" height="{h}" viewBox="0 0 {w} {h}" font-family="{SANS}">',
          '<defs><linearGradient id="g" x1="0" x2="1"><stop offset="0" stop-color="#5fd7ff"/><stop offset="0.5" stop-color="#af87ff"/><stop offset="1" stop-color="#ff87d7"/></linearGradient>',
          '<radialGradient id="glow" cx="0.2" cy="0.1" r="0.9"><stop offset="0" stop-color="#1f3a5f" stop-opacity="0.8"/><stop offset="1" stop-color="#0d1117" stop-opacity="0"/></radialGradient>',
@@ -171,9 +171,9 @@ def hero():
     # shield-ish emblem
     s.append('<g transform="translate(110,120)"><path d="M70 0 L140 26 V84 C140 130 108 160 70 176 C32 160 0 130 0 84 V26 Z" fill="none" stroke="url(#g)" stroke-width="7" stroke-linejoin="round"/>'
              '<path d="M44 84 L64 106 L100 62" fill="none" stroke="url(#g)" stroke-width="9" stroke-linecap="round" stroke-linejoin="round"/></g>')
-    s.append(f'<text x="290" y="205" font-family="{FONT}" font-size="104" font-weight="800" fill="url(#g)">vpn-lxc</text>')
-    s.append(f'<text x="294" y="262" font-size="34" fill="{C["wh"]}" font-weight="600">A VPN dashboard for your Proxmox containers.</text>')
-    s.append(f'<text x="294" y="306" font-size="23" fill="{C["gr"]}">Kill switch included. Set it up once, it keeps itself working.</text>')
+    s.append(f'<text x="290" y="205" font-family="{FONT}" font-size="104" font-weight="800" fill="url(#g)">PVM</text>')
+    s.append(f'<text x="294" y="262" font-size="34" fill="{C["wh"]}" font-weight="600">Proxmox VPN Manager</text>')
+    s.append(f'<text x="294" y="306" font-size="21" fill="{C["gr"]}">A VPN dashboard for your containers. Kill switch included. Set it up once, it keeps itself working.</text>')
     x, y = 110, 372
     for c in chips:
         wd = 26 + len(c) * 12.2
@@ -184,7 +184,7 @@ def hero():
         x += wd + 14
     s.append(f'<rect x="110" y="520" width="1060" height="62" rx="12" fill="{PANEL}" stroke="{LINE}"/>')
     s.append(f'<text x="136" y="559" font-family="{FONT}" font-size="21" fill="{C["ok"]}">$</text>')
-    s.append(f'<text x="164" y="559" font-family="{FONT}" font-size="19" fill="{C["wh"]}">curl -fsSL https://raw.githubusercontent.com/Kalinewb/vpn-lxc/main/install.sh | bash</text>')
+    s.append(f'<text x="164" y="559" font-family="{FONT}" font-size="19" fill="{C["wh"]}">curl -fsSL https://raw.githubusercontent.com/Kalinewb/pvm/main/install.sh | bash</text>')
     s.append("</svg>")
     write("hero.svg", "\n".join(s))
 

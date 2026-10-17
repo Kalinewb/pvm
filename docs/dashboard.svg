@@ -2,7 +2,7 @@
 <rect width="1020" height="531" rx="12" fill="#161b22" stroke="#30363d"/>
 <path d="M0 12a12 12 0 0 1 12-12h996a12 12 0 0 1 12 12v22H0z" fill="#21262d"/>
 <circle cx="24" cy="17" r="6" fill="#ff5f56"/><circle cx="46" cy="17" r="6" fill="#ffbd2e"/><circle cx="68" cy="17" r="6" fill="#27c93f"/>
-<text x="510" y="22" text-anchor="middle" font-family="-apple-system, 'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="13" fill="#8b949e">vpn-lxc · dashboard</text>
+<text x="510" y="22" text-anchor="middle" font-family="-apple-system, 'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="13" fill="#8b949e">pvm · dashboard</text>
 <text x="22" y="68" font-family="ui-monospace, 'JetBrains Mono', 'DejaVu Sans Mono', 'Liberation Mono', Menlo, Consolas, monospace" font-size="15" xml:space="preserve"><tspan fill="#e6edf3"></tspan></text>
 <text x="22" y="89" font-family="ui-monospace, 'JetBrains Mono', 'DejaVu Sans Mono', 'Liberation Mono', Menlo, Consolas, monospace" font-size="15" xml:space="preserve"><tspan fill="#484f58">╭─ </tspan><tspan fill="#e6edf3" font-weight="700">Your containers</tspan><tspan fill="#484f58"> ───────────────────────────────────────────────────────────</tspan></text>
 <text x="22" y="110" font-family="ui-monospace, 'JetBrains Mono', 'DejaVu Sans Mono', 'Liberation Mono', Menlo, Consolas, monospace" font-size="15" xml:space="preserve"><tspan fill="#484f58">│ </tspan><tspan fill="#5fff87">● </tspan><tspan fill="#e6edf3">141  </tspan><tspan fill="#e6edf3" font-weight="700">media        </tspan><tspan fill="#8b949e">gateway  </tspan><tspan fill="#e6edf3">Proton · wg   </tspan><tspan fill="#e6edf3">198.51.100.21 SE </tspan><tspan fill="#5fd7ff">⇅51820 </tspan><tspan fill="#484f58">18s</tspan></text>

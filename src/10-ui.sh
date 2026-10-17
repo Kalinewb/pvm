@@ -31,7 +31,7 @@ statusbar() {
     local rows left right pad
     rows=$(tput lines 2>/dev/null || echo 24); [[ $rows =~ ^[0-9]+$ ]] || return 0
     [ "$rows" -ge 22 ] || return 0
-    left=" vpn-lxc $VERSION   ${1:-}"
+    left=" PVM $VERSION   ${1:-}"
     right="$(hostname) · $(date +%H:%M) "
     pad=$((COLS - ${#left} - ${#right})); [ "$pad" -lt 1 ] && pad=1
     printf '\e7\e[%d;1H%s%s%s%*s%s%s\e8' "$rows" "$BARBG" "$WH" "$left" "$pad" "" "$right" "$R"
@@ -117,12 +117,12 @@ box_row() {
 box_bot() { printf '  %s╰%s╯%s\n' "$DG" "$(rep ─ "$((W - 2))")" "$R"; }
 
 LOGO=(
-'██╗   ██╗██████╗ ███╗   ██╗   ██╗     ██╗  ██╗ ██████╗'
-'██║   ██║██╔══██╗████╗  ██║   ██║     ╚██╗██╔╝██╔════╝'
-'██║   ██║██████╔╝██╔██╗ ██║   ██║      ╚███╔╝ ██║     '
-'╚██╗ ██╔╝██╔═══╝ ██║╚██╗██║   ██║      ██╔██╗ ██║     '
-' ╚████╔╝ ██║     ██║ ╚████║   ███████╗██╔╝ ██╗╚██████╗'
-'  ╚═══╝  ╚═╝     ╚═╝  ╚═══╝   ╚══════╝╚═╝  ╚═╝ ╚═════╝'
+'██████╗ ██╗   ██╗███╗   ███╗'
+'██╔══██╗██║   ██║████╗ ████║'
+'██████╔╝██║   ██║██╔████╔██║'
+'██╔═══╝ ╚██╗ ██╔╝██║╚██╔╝██║'
+'██║      ╚████╔╝ ██║ ╚═╝ ██║'
+'╚═╝       ╚═══╝  ╚═╝     ╚═╝'
 )
 LOGO_SHOWN=0
 big_logo() {
@@ -132,7 +132,7 @@ big_logo() {
         printf '   %s\n' "$(grad "$l")"
         [ "$LOGO_SHOWN" = 0 ] && nap 0.035
     done
-    printf '   %s%s%s\n' "$GR" "w i r e g u a r d  ·  o p e n v p n  ·  k i l l   s w i t c h  ·  g a t e w a y" "$R"
+    printf '   %s%s%s\n' "$GR" "p r o x m o x   v p n   m a n a g e r   ·   w i r e g u a r d   ·   o p e n v p n   ·   k i l l   s w i t c h" "$R"
     LOGO_SHOWN=1
 }
 
@@ -154,7 +154,7 @@ pbar() {   # pbar <done> <total> <width>
 page() {   # page "Title" ["subtitle"]
     fit; cls
     local head right n
-    head="$(grad '◆ VPN·LXC')  ${GR}v$VERSION$R"
+    head="$(grad '◆ PVM')  ${GR}v$VERSION$R"
     right="$GR$FLOW$R"
     n=$((W - $(vislen "$head") - $(vislen "$right")))
     [ "$n" -lt 1 ] && n=1

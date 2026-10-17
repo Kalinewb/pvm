@@ -84,7 +84,7 @@ dashboard() {   # dashboard [cached] : "cached" draws what probe_all already col
         box_row "${WA}▲${R} CT $id $(reg_get "$id" NAME) is set to gateway CT $gw, which isn't set up (use Remove)"
     done
     local wd="${ER}off${R}"
-    systemctl is-active --quiet vpn-lxc-watchdog.timer 2>/dev/null && wd="${OK}on${R}"
+    systemctl is-active --quiet pvm-watchdog.timer 2>/dev/null && wd="${OK}on${R}"
     local nk; nk=$(set_get NOTIFY_KIND); nk=${nk:-none}
     box_row "${DG}$(rep ─ $((W - 4)))${R}"
     local sum="${OK}✔ $DASH_OK protected${R}"

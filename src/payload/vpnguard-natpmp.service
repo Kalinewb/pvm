@@ -1,5 +1,5 @@
 [Unit]
-Description=VPN port forwarding keepalive (NAT-PMP, vpn-lxc.sh)
+Description=VPN port forwarding keepalive (NAT-PMP, PVM)
 BindsTo=vpnguard-tunnel.target
 After=vpnguard-tunnel.target
 PartOf=vpnguard-tunnel.target

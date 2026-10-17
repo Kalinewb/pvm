@@ -1,39 +1,40 @@
 #!/bin/bash
 # ╭──────────────────────────────────────────────────────────────╮
-# │  vpn-lxc.sh · VPN for Proxmox containers                     │
+# │  PVM · Proxmox VPN Manager                                   │
 # │                                                              │
-# │  Two ways to put containers behind a VPN, with a kill switch │
-# │    · per-container: each container runs its own tunnel      │
-# │    · gateway: one VPN container + a private bridge; any      │
-# │      container plugged into that bridge goes through it     │
+# │  Put containers behind a VPN, with a kill switch             │
+# │    · gateways: one VPN container + a private bridge; any     │
+# │      container plugged into that bridge goes through it      │
+# │    · per-container: each container runs its own tunnel       │
 # │                                                              │
 # │  WireGuard or OpenVPN · Mullvad, Proton, AirVPN, any other   │
 # │  port forwarding · dashboard · watchdog with failover ·      │
 # │  saved config library · ntfy / Gotify notifications          │
 # ╰──────────────────────────────────────────────────────────────╯
 #
-# Run on the PROXMOX HOST as root:
-#   bash vpn-lxc.sh               the full-screen app
-#   bash vpn-lxc.sh status CTID   status screen for one container
-#   bash vpn-lxc.sh watchdog      one watchdog round (the timer runs this)
-#   bash vpn-lxc.sh --help
+# Run on the PROXMOX HOST as root (the command is pvm or vpn, in any capitals):
+#   pvm               the full-screen app
+#   pvm status CTID   status screen for one container
+#   pvm watchdog      one watchdog round (the timer runs this)
+#   pvm --help
 
 [ -n "$BASH_VERSION" ] || exec bash "$0" "$@"
 set -o pipefail
 umask 077
 export LC_ALL=C.UTF-8
 
-VERSION="2.4.1"
-REPO_RAW=${VPNLXC_RAW:-https://raw.githubusercontent.com/Kalinewb/vpn-lxc}
+VERSION="3.0.0"
+BIN_DIR=${PVM_BIN_DIR:-/usr/local/sbin}
+REPO_RAW=${PVM_RAW:-https://raw.githubusercontent.com/Kalinewb/pvm}
 SELF=$(readlink -f "$0" 2>/dev/null || echo "$0")
-ETC=${VPNLXC_ETC:-/etc/vpn-lxc}
-VARD=${VPNLXC_VAR:-/var/lib/vpn-lxc}
-IFACES_FILE=${VPNLXC_IFACES:-/etc/network/interfaces}
+ETC=${PVM_ETC:-/etc/pvm}
+VARD=${PVM_VAR:-/var/lib/pvm}
+IFACES_FILE=${PVM_IFACES:-/etc/network/interfaces}
 LIB=$ETC/library
 REG=$ETC/registry
 SETTINGS=$ETC/settings.env
 STAGE_CT=/root/.vpnguard-stage
-ANIM=${VPNLXC_ANIM:-1}
+ANIM=${PVM_ANIM:-1}
 
 # ════════════════════════════════════════════════════════════
 #  Look & feel
@@ -68,7 +69,7 @@ statusbar() {
     local rows left right pad
     rows=$(tput lines 2>/dev/null || echo 24); [[ $rows =~ ^[0-9]+$ ]] || return 0
     [ "$rows" -ge 22 ] || return 0
-    left=" vpn-lxc $VERSION   ${1:-}"
+    left=" PVM $VERSION   ${1:-}"
     right="$(hostname) · $(date +%H:%M) "
     pad=$((COLS - ${#left} - ${#right})); [ "$pad" -lt 1 ] && pad=1
     printf '\e7\e[%d;1H%s%s%s%*s%s%s\e8' "$rows" "$BARBG" "$WH" "$left" "$pad" "" "$right" "$R"
@@ -154,12 +155,12 @@ box_row() {
 box_bot() { printf '  %s╰%s╯%s\n' "$DG" "$(rep ─ "$((W - 2))")" "$R"; }
 
 LOGO=(
-'██╗   ██╗██████╗ ███╗   ██╗   ██╗     ██╗  ██╗ ██████╗'
-'██║   ██║██╔══██╗████╗  ██║   ██║     ╚██╗██╔╝██╔════╝'
-'██║   ██║██████╔╝██╔██╗ ██║   ██║      ╚███╔╝ ██║     '
-'╚██╗ ██╔╝██╔═══╝ ██║╚██╗██║   ██║      ██╔██╗ ██║     '
-' ╚████╔╝ ██║     ██║ ╚████║   ███████╗██╔╝ ██╗╚██████╗'
-'  ╚═══╝  ╚═╝     ╚═╝  ╚═══╝   ╚══════╝╚═╝  ╚═╝ ╚═════╝'
+'██████╗ ██╗   ██╗███╗   ███╗'
+'██╔══██╗██║   ██║████╗ ████║'
+'██████╔╝██║   ██║██╔████╔██║'
+'██╔═══╝ ╚██╗ ██╔╝██║╚██╔╝██║'
+'██║      ╚████╔╝ ██║ ╚═╝ ██║'
+'╚═╝       ╚═══╝  ╚═╝     ╚═╝'
 )
 LOGO_SHOWN=0
 big_logo() {
@@ -169,7 +170,7 @@ big_logo() {
         printf '   %s\n' "$(grad "$l")"
         [ "$LOGO_SHOWN" = 0 ] && nap 0.035
     done
-    printf '   %s%s%s\n' "$GR" "w i r e g u a r d  ·  o p e n v p n  ·  k i l l   s w i t c h  ·  g a t e w a y" "$R"
+    printf '   %s%s%s\n' "$GR" "p r o x m o x   v p n   m a n a g e r   ·   w i r e g u a r d   ·   o p e n v p n   ·   k i l l   s w i t c h" "$R"
     LOGO_SHOWN=1
 }
 
@@ -191,7 +192,7 @@ pbar() {   # pbar <done> <total> <width>
 page() {   # page "Title" ["subtitle"]
     fit; cls
     local head right n
-    head="$(grad '◆ VPN·LXC')  ${GR}v$VERSION$R"
+    head="$(grad '◆ PVM')  ${GR}v$VERSION$R"
     right="$GR$FLOW$R"
     n=$((W - $(vislen "$head") - $(vislen "$right")))
     [ "$n" -lt 1 ] && n=1
@@ -810,13 +811,13 @@ STAGE=""
 cleanup() { screen_leave; cur_show; rm -f "$CT_CACHE" "$CT_CACHE.tmp"; [ -n "$STAGE" ] && rm -rf "$STAGE"; return 0; }
 trap cleanup EXIT
 trap 'exit 130' INT TERM HUP   # closing the terminal must still clean the temp dir (it can hold configs)
-new_stage() { [ -n "$STAGE" ] && return 0; STAGE=$(mktemp -d /tmp/vpn-lxc.XXXXXX) || die "could not create a temp dir"; }
+new_stage() { [ -n "$STAGE" ] && return 0; STAGE=$(mktemp -d /tmp/pvm.XXXXXX) || die "could not create a temp dir"; }
 
 cexec()      { local ct=$1; shift; pct exec "$ct" -- "$@"; }
 cpush()      { pct push "$1" "$2" "$3" --perms "${4:-600}" --user 0 --group 0 >/dev/null; }
 # One `pct list` serves every status/name lookup for 2 seconds. Asking pct per
 # container costs ~0.5s each, which made the pickers hang for half a minute.
-CT_CACHE=/tmp/.vpn-lxc-ct.$$
+CT_CACHE=/tmp/.pvm-ct.$$
 ct_table() {
     local now mt
     now=$(printf '%(%s)T' -1)
@@ -884,7 +885,7 @@ write_payload() {   # write_payload <dir>
 local d=$1
 mkdir -p "$d"
 
-cat > "$d/detect.sh" <<'VPNLXC_PAYLOAD_EOF'
+cat > "$d/detect.sh" <<'PVM_PAYLOAD_EOF'
 #!/bin/bash
 umask 022   # the host script runs with 077 and pct exec passes it on
 export LC_ALL=C
@@ -937,9 +938,9 @@ if [ -f /etc/vpnguard/vpnguard.env ]; then
     echo "HAS_SETUP=1"
     sed -n 's/^\([A-Z][A-Z0-9_]*=\)/CUR_\1/p' /etc/vpnguard/vpnguard.env
 fi
-VPNLXC_PAYLOAD_EOF
+PVM_PAYLOAD_EOF
 
-cat > "$d/vpnguard-dns" <<'VPNLXC_PAYLOAD_EOF'
+cat > "$d/vpnguard-dns" <<'PVM_PAYLOAD_EOF'
 #!/bin/bash
 # vpnguard-dns <ip>...  Called when a tunnel comes up (WireGuard PostUp,
 # OpenVPN route-up). Tunnel role: rewrites resolv.conf. Gateway role:
@@ -969,9 +970,9 @@ else
     chmod 644 /etc/resolv.conf
 fi
 exit 0
-VPNLXC_PAYLOAD_EOF
+PVM_PAYLOAD_EOF
 
-cat > "$d/vpnguard-ovpn-up" <<'VPNLXC_PAYLOAD_EOF'
+cat > "$d/vpnguard-ovpn-up" <<'PVM_PAYLOAD_EOF'
 #!/bin/bash
 # OpenVPN route-up hook: use the DNS servers and gateway the server pushed.
 dns=""
@@ -983,9 +984,9 @@ done
 # shellcheck disable=SC2086
 /usr/local/sbin/vpnguard-dns $dns
 exit 0
-VPNLXC_PAYLOAD_EOF
+PVM_PAYLOAD_EOF
 
-cat > "$d/vpnguard-switch" <<'VPNLXC_PAYLOAD_EOF'
+cat > "$d/vpnguard-switch" <<'PVM_PAYLOAD_EOF'
 #!/bin/bash
 # vpnguard-switch primary|backup: change which VPN config is active.
 set -u
@@ -1006,9 +1007,9 @@ echo "$slot" > /etc/vpnguard/active-slot
 rm -f /run/vpnguard-pf-port
 if timeout 75 systemctl restart "$UNIT"; then echo "now using the $slot config"
 else echo "the $slot config did not come up: journalctl -u $UNIT" >&2; exit 1; fi
-VPNLXC_PAYLOAD_EOF
+PVM_PAYLOAD_EOF
 
-cat > "$d/vpnguard-qbit-port" <<'VPNLXC_PAYLOAD_EOF'
+cat > "$d/vpnguard-qbit-port" <<'PVM_PAYLOAD_EOF'
 #!/bin/bash
 # vpnguard-qbit-port <port>: set qBittorrent's listening port through its WebUI API.
 set -u
@@ -1030,9 +1031,9 @@ code=$(curl "${opts[@]}" -o /dev/null -w '%{http_code}' \
     "$URL/api/v2/app/setPreferences")
 [ "$code" = 200 ] || { echo "qBittorrent refused the new port (HTTP $code)" >&2; exit 1; }
 echo "qBittorrent now listens on port $port"
-VPNLXC_PAYLOAD_EOF
+PVM_PAYLOAD_EOF
 
-cat > "$d/vpnguard-natpmp" <<'VPNLXC_PAYLOAD_EOF'
+cat > "$d/vpnguard-natpmp" <<'PVM_PAYLOAD_EOF'
 #!/bin/bash
 # vpnguard-natpmp: keeps a NAT-PMP port mapping alive (Proton VPN style),
 # opens it in the firewall and tells qBittorrent when it changes.
@@ -1070,11 +1071,11 @@ while true; do
     fi
     sleep 45
 done
-VPNLXC_PAYLOAD_EOF
+PVM_PAYLOAD_EOF
 
-cat > "$d/vpnguard-natpmp.service" <<'VPNLXC_PAYLOAD_EOF'
+cat > "$d/vpnguard-natpmp.service" <<'PVM_PAYLOAD_EOF'
 [Unit]
-Description=VPN port forwarding keepalive (NAT-PMP, vpn-lxc.sh)
+Description=VPN port forwarding keepalive (NAT-PMP, PVM)
 BindsTo=vpnguard-tunnel.target
 After=vpnguard-tunnel.target
 PartOf=vpnguard-tunnel.target
@@ -1086,11 +1087,11 @@ RestartSec=10
 
 [Install]
 WantedBy=multi-user.target
-VPNLXC_PAYLOAD_EOF
+PVM_PAYLOAD_EOF
 
-cat > "$d/vpnguard-openvpn.service" <<'VPNLXC_PAYLOAD_EOF'
+cat > "$d/vpnguard-openvpn.service" <<'PVM_PAYLOAD_EOF'
 [Unit]
-Description=OpenVPN tunnel (vpn-lxc.sh)
+Description=OpenVPN tunnel (PVM)
 Wants=network-online.target
 After=network-online.target nftables.service
 Requires=nftables.service
@@ -1106,24 +1107,24 @@ TimeoutStartSec=60
 
 [Install]
 WantedBy=multi-user.target
-VPNLXC_PAYLOAD_EOF
+PVM_PAYLOAD_EOF
 
-cat > "$d/nftables.conf" <<'VPNLXC_PAYLOAD_EOF'
+cat > "$d/nftables.conf" <<'PVM_PAYLOAD_EOF'
 #!/usr/sbin/nft -f
-# Managed by vpn-lxc.sh. The VPN kill switch lives in /etc/vpnguard/vpnguard.nft.
+# Managed by PVM. The VPN kill switch lives in /etc/vpnguard/vpnguard.nft.
 # There's no "flush ruleset" on purpose: reloading must not wipe the tunnel's own tables.
 include "/etc/vpnguard/vpnguard.nft"
-VPNLXC_PAYLOAD_EOF
+PVM_PAYLOAD_EOF
 
-cat > "$d/dropin-nftables.conf" <<'VPNLXC_PAYLOAD_EOF'
-# vpn-lxc.sh: stopping nftables must never remove the kill switch.
+cat > "$d/dropin-nftables.conf" <<'PVM_PAYLOAD_EOF'
+# PVM: stopping nftables must never remove the kill switch.
 [Service]
 ExecStop=
-VPNLXC_PAYLOAD_EOF
+PVM_PAYLOAD_EOF
 
-cat > "$d/apply.sh" <<'VPNLXC_PAYLOAD_EOF'
+cat > "$d/apply.sh" <<'PVM_PAYLOAD_EOF'
 #!/bin/bash
-# Runs inside the container, started by vpn-lxc.sh on the Proxmox host.
+# Runs inside the container, started by PVM on the Proxmox host.
 # Prints "STEP/WARN/FAIL/RESULT text" lines that the host draws as a checklist.
 umask 022   # the host script runs with 077 and pct exec passes it on
 set -uo pipefail
@@ -1176,7 +1177,7 @@ fi
 # one target that means "the tunnel is up", whatever the protocol
 cat > /etc/systemd/system/vpnguard-tunnel.target <<EOF
 [Unit]
-Description=VPN tunnel is up (vpn-lxc.sh)
+Description=VPN tunnel is up (PVM)
 BindsTo=$UNIT
 PartOf=$UNIT
 After=$UNIT
@@ -1191,7 +1192,7 @@ if [ "$PROTO" = openvpn ]; then
     rm -rf /etc/systemd/system/wg-quick@wg0.service.d
 else
     install -d -m 755 "/etc/systemd/system/wg-quick@$VPN_IF.service.d"
-    printf '# vpn-lxc.sh: the firewall is always up before the tunnel.\n[Unit]\nRequires=nftables.service\nAfter=nftables.service\nWants=vpnguard-tunnel.target\n' \
+    printf '# PVM: the firewall is always up before the tunnel.\n[Unit]\nRequires=nftables.service\nAfter=nftables.service\nWants=vpnguard-tunnel.target\n' \
         > "/etc/systemd/system/wg-quick@$VPN_IF.service.d/vpnguard.conf"
     if [ -e /etc/systemd/system/vpnguard-openvpn.service ]; then
         systemctl disable --now vpnguard-openvpn >/dev/null 2>&1
@@ -1208,7 +1209,7 @@ for dd in /etc/systemd/system/*.service.d/vpnguard-app.conf; do
 done
 for a in $APPS; do
     install -d -m 755 "/etc/systemd/system/$a.d"
-    printf '# vpn-lxc.sh: only run while the VPN tunnel is up.\n[Unit]\nBindsTo=vpnguard-tunnel.target\nAfter=vpnguard-tunnel.target\nPartOf=vpnguard-tunnel.target\n' \
+    printf '# PVM: only run while the VPN tunnel is up.\n[Unit]\nBindsTo=vpnguard-tunnel.target\nAfter=vpnguard-tunnel.target\nPartOf=vpnguard-tunnel.target\n' \
         > "/etc/systemd/system/$a.d/vpnguard-app.conf"
 done
 
@@ -1336,9 +1337,9 @@ esac
 echo "RESULT DNS=$(tr '\n' ' ' < /run/vpnguard-dns 2>/dev/null)"
 echo "RESULT BACKUP=$BK"
 rm -rf "$S"
-VPNLXC_PAYLOAD_EOF
+PVM_PAYLOAD_EOF
 
-cat > "$d/remove.sh" <<'VPNLXC_PAYLOAD_EOF'
+cat > "$d/remove.sh" <<'PVM_PAYLOAD_EOF'
 #!/bin/bash
 # remove.sh <restore_legacy 0|1> <stop_tunnel 0|1>
 umask 022   # the host script runs with 077 and pct exec passes it on
@@ -1398,9 +1399,9 @@ rm -f /etc/vpnguard/vpnguard.env /etc/vpnguard/vpnguard.nft /etc/vpnguard/qbit.e
       /etc/sysctl.d/99-vpnguard.conf /etc/dnsmasq.d/vpnguard.conf
 rm -rf /etc/vpnguard/slots
 step "backups kept in /etc/vpnguard/backup"
-VPNLXC_PAYLOAD_EOF
+PVM_PAYLOAD_EOF
 
-cat > "$d/client.sh" <<'VPNLXC_PAYLOAD_EOF'
+cat > "$d/client.sh" <<'PVM_PAYLOAD_EOF'
 #!/bin/bash
 # client.sh <nameserver> <qbit_conf or -> : finish moving a container behind the VPN gateway.
 umask 022   # the host script runs with 077 and pct exec passes it on
@@ -1424,11 +1425,11 @@ if [ "$QCONF" != - ] && [ -f "$QCONF" ]; then
     for u in $units; do systemctl start "$u" 2>/dev/null; done
     step "qBittorrent no longer bound to a VPN interface (the gateway handles it)"
 fi
-VPNLXC_PAYLOAD_EOF
+PVM_PAYLOAD_EOF
 
-cat > "$d/vpn-status" <<'VPNLXC_PAYLOAD_EOF'
+cat > "$d/vpn-status" <<'PVM_PAYLOAD_EOF'
 #!/bin/bash
-# vpn-status: tunnel, leak and kill switch check. Installed by vpn-lxc.sh.
+# vpn-status: tunnel, leak and kill switch check. Installed by PVM.
 #   vpn-status            full screen
 #   vpn-status --brief    KEY=value summary for the dashboard
 #   vpn-status --health   quick health check for the watchdog (no outside lookups)
@@ -1576,7 +1577,7 @@ EOF
     printf '   %s%s  ·  %s%s\n' "$GREY" "$(hostname)" "$(date '+%Y-%m-%d %H:%M:%S')" "$RESET"
 }
 
-[ -f "$ENV" ] || echo "note: $ENV not found, using defaults (was vpn-lxc.sh run on this container?)"
+[ -f "$ENV" ] || echo "note: $ENV not found, using defaults (was PVM run on this container?)"
 banner
 RETRY=1 fetch "probing the exit node..." "$TMP/exit" -4 https://ipinfo.io/json
 [ "$PROVIDER" = mullvad ] && RETRY=1 fetch "asking Mullvad..." "$TMP/mullvad" -4 https://am.i.mullvad.net/json
@@ -1724,12 +1725,12 @@ printf '  %s┗%s%s\n' "$C" "$(hr 44)" "$RESET"
 printf '  %s%s  %s/%s passed · %s warning(s) · %s failed · %ss%s\n\n' \
     "$GREY" "$(bar "$PASS" "$TOTAL")" "$PASS" "$TOTAL" "$WARN" "$FAIL" "$SECONDS" "$RESET"
 [ "$FAIL" -eq 0 ]
-VPNLXC_PAYLOAD_EOF
+PVM_PAYLOAD_EOF
 
-cat > "$d/dhclient-vpnguard" <<'VPNLXC_PAYLOAD_EOF'
-# vpn-lxc.sh: DNS comes from the VPN tunnel, never from the DHCP server on the home network.
+cat > "$d/dhclient-vpnguard" <<'PVM_PAYLOAD_EOF'
+# PVM: DNS comes from the VPN tunnel, never from the DHCP server on the home network.
 make_resolv_conf() { :; }
-VPNLXC_PAYLOAD_EOF
+PVM_PAYLOAD_EOF
 }
 # ════════════════════════════════════════════════════════════
 #  VPN configs: parse, clean up, pin endpoints, library
@@ -1789,11 +1790,11 @@ wg_render() {
     }
     /^[ \t]*\[[Ii]nterface\][ \t]*$/ {
         print
-        print "# DNS is handled by vpn-lxc.sh: only ever through the tunnel"
+        print "# DNS is handled by PVM: only ever through the tunnel"
         if (dns != "") print "PostUp = /usr/local/sbin/vpnguard-dns " dns
         next
     }
-    /^# DNS is handled by vpn-lxc.sh/ { next }
+    /^# DNS is handled by (PVM|vpn-lxc.sh)/ { next }
     index($0, "=") && $0 !~ /^[ \t]*#/ {
         k = tolower(trim(substr($0, 1, index($0, "=") - 1)))
         v = trim(substr($0, index($0, "=") + 1))
@@ -1816,7 +1817,7 @@ ovpn_info() {
     /^[ \t]*<\/[A-Za-z-]+>/ { inblk = 0; next }
     /^[ \t]*<[A-Za-z-]+>/   { inblk = 1; if ($0 ~ /<auth-user-pass>/) inline_auth = 1; next }
     inblk { next }
-    /^# --- vpn-lxc.sh ---/ { ours = 1 }
+    /^# --- (PVM|vpn-lxc.sh) ---/ { ours = 1 }
     /^[ \t]*[#;]/ { next }
     $1 == "remote"         { nr++; rh[nr] = $2; rp[nr] = $3; rt[nr] = $4 }
     $1 == "proto"          { proto = $2 }
@@ -1838,7 +1839,7 @@ ovpn_info() {
 # ovpn_render SRC DST "ip:port/proto ..." "auth file path or empty"
 ovpn_render() {
     awk -v rem="$3" -v authf="$4" '
-    /^# --- vpn-lxc.sh ---/ { exit }
+    /^# --- (PVM|vpn-lxc.sh) ---/ { exit }
     /^[ \t]*<auth-user-pass>/   { skip = 1; next }
     /^[ \t]*<\/auth-user-pass>/ { skip = 0; next }
     skip { next }
@@ -1848,8 +1849,8 @@ ovpn_render() {
     $1 ~ /^(remote|up|down|route-up|ipchange|route-pre-down|script-security|auth-user-pass|auth-nocache|dev|dev-type|persist-tun|resolv-retry|redirect-gateway|remote-random-hostname)$/ { next }
     { print }
     END {
-        print "# --- vpn-lxc.sh ---"
-        print "# Below is managed by vpn-lxc.sh. Servers are pinned to IPs because DNS only works inside the tunnel."
+        print "# --- PVM ---"
+        print "# Below is managed by PVM. Servers are pinned to IPs because DNS only works inside the tunnel."
         n = split(rem, R, " ")
         for (i = 1; i <= n; i++) { split(R[i], a, /[:\/]/); print "remote " a[1] " " a[2] " " a[3] }
         print "dev tun0"
@@ -3010,8 +3011,9 @@ wait_ct_net() {
     return 1
 }
 
-snapshot_ct() { pct snapshot "$1" "vpnlxc_$(date +%Y%m%d_%H%M%S)" --description "before vpn-lxc.sh $(date '+%F %T')"; }
-last_snapshot() { pct listsnapshot "$1" 2>/dev/null | grep -o 'vpnlxc_[0-9_]*' | sort | tail -n 1; }
+snapshot_ct() { pct snapshot "$1" "pvm_$(date +%Y%m%d_%H%M%S)" --description "before PVM $(date '+%F %T')"; }
+# snapshots made before the rename are called vpnlxc_...; the newest of either kind wins
+last_snapshot() { pct listsnapshot "$1" 2>/dev/null | grep -oE '(pvm|vpnlxc)_[0-9]{8}_[0-9]{6}' | sort -t_ -k2,3 | tail -n 1; }
 
 # slots: rendered primary/backup configs (+ OpenVPN logins)
 render_slots() {   # render_slots TARGET DIR
@@ -3068,7 +3070,7 @@ stage_tunnel() {   # stage_tunnel TARGET DIR
     local dhcp=0
     pct config "${V[$t.ct]}" | grep -E '^net[0-9]+:' | grep "name=$lan," | grep -q 'ip=dhcp' && dhcp=1
     {
-        echo "# vpn-lxc.sh settings ($(date '+%F %T')). Re-run vpn-lxc.sh on the Proxmox host to change them."
+        echo "# PVM settings ($(date '+%F %T')). Re-run PVM on the Proxmox host to change them."
         echo "VERSION=$VERSION"; echo "ROLE=tunnel"; echo "PROVIDER=${V[$t.provider]}"
         echo "PROTO=$PROTO"; echo "VPN_IF=$VPN_IF"; echo "TUNNEL_UNIT=$UNIT"
         echo "LAN_IF=$lan"; echo "LAN_NET=${V[lan_net]}"; echo "LAN_MODE=${V[$t.lan_mode]:-open}"; echo "LAN_TCP_PORTS=${V[$t.lan_tcp]}"; echo "LAN_OUT=${V[$t.lan_out]}"
@@ -3081,8 +3083,8 @@ stage_tunnel() {   # stage_tunnel TARGET DIR
     for e in ${V[$t.lan_out]}; do out_elems="${out_elems:+$out_elems, }${e%:*} . ${e##*:}"; done
     {
         echo '#!/usr/sbin/nft -f'
-        echo "# VPN kill switch for CT ${V[$t.ct]} (${V[$t.name]}), generated by vpn-lxc.sh $(date '+%F %T')."
-        echo "# Default-deny for IPv4 and IPv6. Re-run vpn-lxc.sh on the host to change it."
+        echo "# VPN kill switch for CT ${V[$t.ct]} (${V[$t.name]}), generated by PVM $(date '+%F %T')."
+        echo "# Default-deny for IPv4 and IPv6. Re-run PVM on the host to change it."
         echo "table inet vpnguard {}"
         echo "delete table inet vpnguard"
         echo "table inet vpnguard {"
@@ -3151,7 +3153,7 @@ stage_gateway() {   # stage_gateway DIR
     local dhcp=0; [ "${V[gw.lanaddr]:-}" = dhcp ] && dhcp=1
     [ "${V[gw.mode]}" = reconfig ] && [ "$(reg_get "${V[gw.ct]}" LAN_ADDR)" = dhcp ] && dhcp=1
     {
-        echo "# vpn-lxc.sh settings ($(date '+%F %T')). Re-run vpn-lxc.sh on the Proxmox host to change them."
+        echo "# PVM settings ($(date '+%F %T')). Re-run PVM on the Proxmox host to change them."
         echo "VERSION=$VERSION"; echo "ROLE=gateway"; echo "PROVIDER=${V[gw.provider]}"
         echo "PROTO=$PROTO"; echo "VPN_IF=$VPN_IF"; echo "TUNNEL_UNIT=$UNIT"
         echo "LAN_IF=eth0"; echo "LAN_NET=${V[lan_net]}"; echo "LAN_MODE=${V[gw.lan_mode]:-open}"; echo "VPNNET_IF=eth1"; echo "VPN_NET=${V[gw.net]}"; echo "GW_IP=$gwip"
@@ -3162,7 +3164,7 @@ stage_gateway() {   # stage_gateway DIR
         echo "QBIT_URL=${V[gw.qbit_url]:-}"
     } > "$d/vpnguard.env"
     cat > "$d/dnsmasq.conf" <<EOF
-# vpn-lxc.sh: DNS (only through the tunnel) and DHCP for the VPN network
+# PVM: DNS (only through the tunnel) and DHCP for the VPN network
 interface=eth1
 listen-address=127.0.0.1
 bind-dynamic
@@ -3179,7 +3181,7 @@ EOF
     for e in ${V[gw.lan_out]:-}; do out_elems="${out_elems:+$out_elems, }${e%:*} . ${e##*:}"; done
     {
         echo '#!/usr/sbin/nft -f'
-        echo "# VPN gateway kill switch, generated by vpn-lxc.sh $(date '+%F %T')."
+        echo "# VPN gateway kill switch, generated by PVM $(date '+%F %T')."
         echo "# The VPN network (${V[gw.net]} on eth1) can only leave through $VPN_IF."
         echo "table inet vpnguard {}"
         echo "delete table inet vpnguard"
@@ -3270,19 +3272,19 @@ section_head() { printf '\n  %s◆%s %s%s%s %s%s%s\n' "$PK" "$R" "$B" "$1" "$R" 
 
 install_watchdog() {
     [ "$(set_get WATCHDOG)" = 0 ] && return 0
-    [ "$SELF" = /usr/local/sbin/vpn-lxc ] || install -m 755 "$SELF" /usr/local/sbin/vpn-lxc
-    cat > /etc/systemd/system/vpn-lxc-watchdog.service <<'EOF'
+    [ "$(readlink -f "$BIN_DIR/pvm" 2>/dev/null)" = "$SELF" ] || { install -m 755 "$SELF" "$BIN_DIR/pvm" && install_links; }
+    cat > /etc/systemd/system/pvm-watchdog.service <<'EOF'
 [Unit]
-Description=vpn-lxc.sh watchdog: checks VPN tunnels, restarts or fails over, notifies
+Description=PVM watchdog: checks VPN tunnels, restarts or fails over, notifies
 After=pve-guests.service
 
 [Service]
 Type=oneshot
-ExecStart=/usr/local/sbin/vpn-lxc watchdog
+ExecStart=/usr/local/sbin/pvm watchdog
 EOF
-    cat > /etc/systemd/system/vpn-lxc-watchdog.timer <<'EOF'
+    cat > /etc/systemd/system/pvm-watchdog.timer <<'EOF'
 [Unit]
-Description=Run the vpn-lxc.sh watchdog every 2 minutes
+Description=Run the PVM watchdog every 2 minutes
 
 [Timer]
 OnBootSec=3min
@@ -3291,7 +3293,7 @@ OnUnitActiveSec=2min
 [Install]
 WantedBy=timers.target
 EOF
-    systemctl daemon-reload && systemctl enable --now vpn-lxc-watchdog.timer >/dev/null 2>&1
+    systemctl daemon-reload && systemctl enable --now pvm-watchdog.timer >/dev/null 2>&1
 }
 
 # ── per-container apply ─────────────────────────────────────
@@ -3393,7 +3395,7 @@ pick_ct_from_targets() {
 rollback_ct() {
     local ct=$1 snap a
     snap=$(last_snapshot "$ct")
-    [ -n "$snap" ] || { bad "no vpn-lxc snapshot found for CT $ct"; pause; return; }
+    [ -n "$snap" ] || { bad "no pvm snapshot found for CT $ct"; pause; return; }
     yn a "Roll CT $ct back to $snap? (it restarts)" n || return
     [ "$a" = y ] || return
     run_task "rolling back CT $ct" bash -c "pct stop $ct >/dev/null 2>&1; pct rollback $ct $snap && pct start $ct" && reg_del "$ct"
@@ -3403,8 +3405,8 @@ rollback_ct() {
 # ── gateway apply ───────────────────────────────────────────
 add_bridge() {
     local br=$1
-    cp -a "$IFACES_FILE" "$IFACES_FILE.vpn-lxc.$(date +%Y%m%d-%H%M%S)" || return 1
-    printf '\nauto %s\niface %s inet manual\n\tbridge-ports none\n\tbridge-stp off\n\tbridge-fd 0\n#VPN-only network (vpn-lxc.sh)\n' "$br" "$br" >> "$IFACES_FILE"
+    cp -a "$IFACES_FILE" "$IFACES_FILE.pvm.$(date +%Y%m%d-%H%M%S)" || return 1
+    printf '\nauto %s\niface %s inet manual\n\tbridge-ports none\n\tbridge-stp off\n\tbridge-fd 0\n#VPN-only network (PVM)\n' "$br" "$br" >> "$IFACES_FILE"
     ifreload -a && ip link show "$br" >/dev/null
 }
 
@@ -3434,7 +3436,7 @@ create_gateway() {
     local -a args=("$id" "$tpl" --hostname "${V[gw.name]}" --arch "$(dpkg --print-architecture)" --memory 256 --swap 128 --cores 1
                    --rootfs "${V[gw.storage]}:2" --net0 "$net0" --net1 "$net1" --unprivileged 1
                    --features nesting=1 --onboot 1 --startup 'order=1,up=15' --ostype debian
-                   --description "VPN gateway, managed by vpn-lxc.sh")
+                   --description "VPN gateway, managed by PVM")
     # this script runs with umask 077 to protect its secrets; a container created that way gets a root-only /etc
     umask 022
     if ! pct create "${args[@]}" --dev0 /dev/net/tun; then
@@ -3681,7 +3683,7 @@ dashboard() {   # dashboard [cached] : "cached" draws what probe_all already col
         box_row "${WA}▲${R} CT $id $(reg_get "$id" NAME) is set to gateway CT $gw, which isn't set up (use Remove)"
     done
     local wd="${ER}off${R}"
-    systemctl is-active --quiet vpn-lxc-watchdog.timer 2>/dev/null && wd="${OK}on${R}"
+    systemctl is-active --quiet pvm-watchdog.timer 2>/dev/null && wd="${OK}on${R}"
     local nk; nk=$(set_get NOTIFY_KIND); nk=${nk:-none}
     box_row "${DG}$(rep ─ $((W - 4)))${R}"
     local sum="${OK}✔ $DASH_OK protected${R}"
@@ -3901,7 +3903,7 @@ switch_screen() {
     yn a "Switch to the $other config?" y || return 0
     [ "$a" = y ] || return 0
     run_task "switching CT $id to $other" cexec "$id" /usr/local/sbin/vpnguard-switch "$other" \
-        && notify "$(reg_get "$id" NAME): switched to $other" "Switched by hand from the vpn-lxc menu." 2 repeat
+        && notify "$(reg_get "$id" NAME): switched to $other" "Switched by hand from the pvm menu." 2 repeat
     pause
 }
 
@@ -3969,7 +3971,7 @@ settings_screen() {
         fa=$(set_get WD_FAILOVER_AFTER); fa=${fa:-4}
         nk=$(set_get NOTIFY_KIND); nk=${nk:-none}
         timer="${ER}not installed${R}"
-        systemctl is-active --quiet vpn-lxc-watchdog.timer 2>/dev/null && timer="${OK}running${R}"
+        systemctl is-active --quiet pvm-watchdog.timer 2>/dev/null && timer="${OK}running${R}"
         box_top "Now"
         box_row "${GR}Watchdog${R}         $([ "$wd" = 1 ] && echo "${OK}on${R}" || echo "${ER}off${R}") · timer $timer"
         box_row "${GR}Restart after${R}    $ra failed checks ($((ra * 2)) min)"
@@ -3988,7 +3990,7 @@ settings_screen() {
         case $a in
             toggle)
                 if [ "$wd" = 1 ]; then
-                    set_set WATCHDOG 0; systemctl disable --now vpn-lxc-watchdog.timer >/dev/null 2>&1; ok "watchdog off"
+                    set_set WATCHDOG 0; systemctl disable --now pvm-watchdog.timer >/dev/null 2>&1; ok "watchdog off"
                 else
                     set_set WATCHDOG 1; run_task "installing the watchdog timer" install_watchdog
                 fi
@@ -4011,7 +4013,7 @@ settings_screen() {
                         field url "ntfy server" "$(set_get NOTIFY_URL | grep . || echo https://ntfy.sh)" v_url || continue
                         [ -z "$url" ] && url=https://ntfy.sh
                         set_set NOTIFY_KIND ntfy
-                        field topic "Topic (long and random if you use ntfy.sh)" "$(set_get NOTIFY_TOPIC | grep . || echo "vpn-lxc-$(tr -dc a-z0-9 < /dev/urandom | head -c 10)")" v_name || continue
+                        field topic "Topic (long and random if you use ntfy.sh)" "$(set_get NOTIFY_TOPIC | grep . || echo "pvm-$(tr -dc a-z0-9 < /dev/urandom | head -c 10)")" v_name || continue
                         secret token "Access token (optional, ⏎ to skip)"
                         set_set NOTIFY_URL "$url"; set_set NOTIFY_TOPIC "$topic"; set_set NOTIFY_TOKEN "$token"
                         note "subscribe to $topic in the ntfy app" ;;
@@ -4024,7 +4026,7 @@ settings_screen() {
                 pause ;;
             test)
                 if [ "$nk" = none ]; then warn "notifications are off: pick ntfy or Gotify first"
-                elif run_task "sending a test" notify "vpn-lxc test" "Notifications from $(hostname) work." 3 white_check_mark; then ok "check your phone"
+                elif run_task "sending a test" notify "pvm test" "Notifications from $(hostname) work." 3 white_check_mark; then ok "check your phone"
                 else bad "it didn't go through: check the server, topic and token"; fi
                 pause ;;
             library) library_screen ;;
@@ -4084,11 +4086,11 @@ remove_screen() {
 
 remove_bridge() {
     local br=$1 tmp
-    cp -a "$IFACES_FILE" "$IFACES_FILE.vpn-lxc.$(date +%Y%m%d-%H%M%S)"
+    cp -a "$IFACES_FILE" "$IFACES_FILE.pvm.$(date +%Y%m%d-%H%M%S)"
     tmp=$(mktemp)
     awk -v br="$br" '
         $1 == "auto" && $2 == br { skip = 1; if (held > 0) held--; next }   # also drops the blank line we added in front of it
-        skip && /^#VPN-only network \(vpn-lxc.sh\)/ { skip = 0; next }
+        skip && /^#VPN-only network \((PVM|vpn-lxc.sh)\)/ { skip = 0; next }
         skip && ($0 ~ /^iface / || $0 ~ /^[ \t]/ || $0 == "") { next }
         $0 == "" { held++; next }
         { skip = 0; while (held > 0) { print ""; held-- } print }
@@ -4204,9 +4206,45 @@ main_menu() {
     printf '\n  %s  %sbye%s\n\n' "$(grad '◆ VPN·LXC')" "$GR" "$R"
 }
 
-# vpn-lxc update [--check] [ref] : fetch the latest release, verify its checksum, install it
+# The command is `pvm` or `vpn`, in any capitals (PVM, Vpn, ...): one real file plus a symlink per spelling.
+case_variants() {   # case_variants pvm : every upper/lower mix, one per line
+    local w=$1 out=("") n o i c u l
+    for ((i = 0; i < ${#w}; i++)); do
+        c=${w:i:1}; u=${c^^}; l=${c,,}; n=()
+        for o in "${out[@]}"; do n+=("$o$l"); [ "$u" != "$l" ] && n+=("$o$u"); done
+        out=("${n[@]}")
+    done
+    printf '%s\n' "${out[@]}"
+}
+install_links() {
+    local real=$BIN_DIR/pvm name p
+    [ -f "$real" ] || return 0
+    for name in $(case_variants pvm) $(case_variants vpn) vpn-lxc; do
+        [ "$name" = pvm ] && continue
+        p=$BIN_DIR/$name
+        if [ -e "$p" ] || [ -L "$p" ]; then
+            if [ -L "$p" ] && [ "$(readlink "$p")" = pvm ]; then continue; fi          # already ours
+            # a different program called vpn / Vpn / ...: leave it alone. The old vpn-lxc command is ours to replace.
+            [ "$name" = vpn-lxc ] || { printf '    left %s alone (something else is installed there)\n' "$p" >&2; continue; }
+        fi
+        ln -sfn pvm "$p"
+    done
+}
+# one-time move from the old name (vpn-lxc): settings, library, registry and the watchdog timer
+migrate_old() {
+    [ "$ETC" = /etc/pvm ] || return 0
+    if [ -d /etc/vpn-lxc ] && [ ! -L /etc/vpn-lxc ] && [ ! -e /etc/pvm ]; then mv /etc/vpn-lxc /etc/pvm && ln -s /etc/pvm /etc/vpn-lxc; fi
+    if [ -d /var/lib/vpn-lxc ] && [ ! -L /var/lib/vpn-lxc ] && [ ! -e /var/lib/pvm ]; then mv /var/lib/vpn-lxc /var/lib/pvm && ln -s /var/lib/pvm /var/lib/vpn-lxc; fi
+    if [ -e /etc/systemd/system/vpn-lxc-watchdog.timer ]; then
+        systemctl disable --now vpn-lxc-watchdog.timer >/dev/null 2>&1
+        rm -f /etc/systemd/system/vpn-lxc-watchdog.service /etc/systemd/system/vpn-lxc-watchdog.timer
+        install_watchdog
+    fi
+}
+
+# pvm update [--check] [ref] : fetch the latest release, verify its checksum, install it
 update_self() {
-    local check=0 ref=main tmp want have newv oldv dest=/usr/local/sbin/vpn-lxc
+    local check=0 ref=main tmp want have newv oldv dest=$BIN_DIR/pvm
     for a in "$@"; do case $a in --check) check=1 ;; *) ref=$a ;; esac; done
     command -v curl >/dev/null 2>&1 || die "curl is needed"
     tmp=$(mktemp -d) || die "could not create a temp dir"
@@ -4214,8 +4252,8 @@ update_self() {
     trap "rm -rf '$tmp'" RETURN
     # a changing query string keeps GitHub's cache from handing out an older copy
     local bust; bust="?t=$(date +%s)"
-    curl -fsSL -m 60 "$REPO_RAW/$ref/dist/vpn-lxc.sh$bust" -o "$tmp/s" || die "could not download the latest version (no internet, or no such version: $ref)"
-    curl -fsSL -m 30 "$REPO_RAW/$ref/dist/vpn-lxc.sh.sha256$bust" -o "$tmp/s.sha" || die "could not download the checksum"
+    curl -fsSL -m 60 "$REPO_RAW/$ref/dist/pvm.sh$bust" -o "$tmp/s" || die "could not download the latest version (no internet, or no such version: $ref)"
+    curl -fsSL -m 30 "$REPO_RAW/$ref/dist/pvm.sh.sha256$bust" -o "$tmp/s.sha" || die "could not download the checksum"
     want=$(cut -d' ' -f1 "$tmp/s.sha"); have=$(sha256sum "$tmp/s" | cut -d' ' -f1)
     [ "$want" = "$have" ] || die "checksum mismatch, nothing was changed"
     head -n 1 "$tmp/s" | grep -q '^#!/bin/bash' && bash -n "$tmp/s" || die "the download is not a valid script, nothing was changed"
@@ -4227,45 +4265,54 @@ update_self() {
         printf '\n    %s✔%s already up to date (version %s)\n\n' "$OK" "$R" "$oldv"; return 0
     fi
     if [ "$check" = 1 ]; then
-        printf '\n    %s▲%s version %s is available (you have %s). Run: vpn-lxc update\n\n' "$WA" "$R" "$newv" "$oldv"; return 0
+        printf '\n    %s▲%s version %s is available (you have %s). Run: pvm update\n\n' "$WA" "$R" "$newv" "$oldv"; return 0
     fi
     install -m 755 "$tmp/s" "$dest.new" && mv -f "$dest.new" "$dest"
+    install_links
     printf '\n    %s✔%s updated %s → %s at %s\n' "$OK" "$R" "$oldv" "$newv" "$dest"
     note "the watchdog uses the new version from its next round"
-    note "containers keep their current setup; open vpn-lxc and re-run Protect containers on one to refresh its in-container tools"
+    note "containers keep their current setup; open pvm and re-run Protect containers on one to refresh its in-container tools"
     echo
 }
 
 usage() {
     cat <<EOF
-vpn-lxc.sh $VERSION: VPN for Proxmox containers (per-container tunnels or a VPN gateway)
+PVM $VERSION · Proxmox VPN Manager
 
-  bash vpn-lxc.sh                       the full-screen app (dashboard + menu)
-  bash vpn-lxc.sh dashboard             print the dashboard once
-  bash vpn-lxc.sh live                  auto-refreshing dashboard
-  bash vpn-lxc.sh status CTID           status screen for one container
-  bash vpn-lxc.sh switch CTID primary|backup
-  bash vpn-lxc.sh watchdog              one watchdog round (the systemd timer runs this)
-  bash vpn-lxc.sh update                install the latest version (update --check only looks)
-  bash vpn-lxc.sh version
+  pvm                       the full-screen app (dashboard + menu); "vpn" works too, in any capitals
+  pvm dashboard             print the dashboard once
+  pvm live                  auto-refreshing dashboard
+  pvm status CTID           status screen for one container
+  pvm switch CTID primary|backup
+  pvm watchdog              one watchdog round (the systemd timer runs this)
+  pvm update                install the latest version (update --check only looks)
+  pvm version
 EOF
 }
 
 main() {
-    case ${1:-} in -h|--help|help) usage; exit 0 ;; version|--version) echo "vpn-lxc $VERSION"; exit 0 ;; esac
+    local cmd=${1:-menu}; cmd=${cmd,,}
+    case $cmd in -h|--help|help) usage; exit 0 ;; version|--version) echo "pvm $VERSION"; exit 0 ;; esac
     [ "$(id -u)" -eq 0 ] || die "run this as root on the Proxmox host"
     command -v pct >/dev/null 2>&1 || die "pct not found: run this on the Proxmox host, not inside a container"
+    migrate_old
+    # first run of a version that arrived under the old command name (vpn-lxc): become the pvm file
+    if [ -f "$SELF" ] && [ "$(dirname "$SELF")" = "$BIN_DIR" ] && [ "$(basename "$SELF")" != pvm ] && [ ! -L "$BIN_DIR/pvm" ]; then
+        install -m 755 "$SELF" "$BIN_DIR/pvm.new" && mv -f "$BIN_DIR/pvm.new" "$BIN_DIR/pvm" && install_links
+    fi
+    if [ -f "$BIN_DIR/pvm" ] && [ "$(readlink -f "$BIN_DIR/pvm")" = "$(readlink -f "$SELF")" ]; then install_links; fi
     install -d -m 700 "$ETC" "$REG" "$LIB"
-    case ${1:-menu} in
+    case $cmd in
         menu)     main_menu ;;
+        links)    install_links ;;
         update)   shift; update_self "$@" ;;
         watchdog) watchdog_round ;;
         dashboard|list) new_stage; dashboard ;;
         live)     live_screen ;;
-        status)   [[ ${2:-} =~ ^[0-9]+$ ]] || die "usage: vpn-lxc.sh status CTID"
+        status)   [[ ${2:-} =~ ^[0-9]+$ ]] || die "usage: pvm status CTID"
                   cexec "$2" env FORCE_COLOR="$FANCY" /usr/local/sbin/vpn-status ;;
-        switch)   [[ ${2:-} =~ ^[0-9]+$ ]] && [[ ${3:-} =~ ^(primary|backup)$ ]] || die "usage: vpn-lxc.sh switch CTID primary|backup"
-                  cexec "$2" /usr/local/sbin/vpnguard-switch "$3" ;;
+        switch)   [[ ${2:-} =~ ^[0-9]+$ ]] && [[ ${3,,} =~ ^(primary|backup)$ ]] || die "usage: pvm switch CTID primary|backup"
+                  cexec "$2" /usr/local/sbin/vpnguard-switch "${3,,}" ;;
         *)        usage; exit 1 ;;
     esac
 }

@@ -1,22 +1,23 @@
-<p align="center"><img src="docs/hero.svg" alt="vpn-lxc: a VPN dashboard for your Proxmox containers" width="100%"></p>
+<p align="center"><img src="docs/hero.svg" alt="PVM: Proxmox VPN Manager" width="100%"></p>
 
-**vpn-lxc** puts Proxmox containers behind a VPN, with a kill switch, from a full-screen dashboard you drive with the arrow keys. It fills your terminal, and the layout follows its size.
+**PVM (Proxmox VPN Manager)** puts Proxmox containers behind a VPN, with a kill switch, from a full-screen dashboard you drive with the arrow keys. It fills your terminal, and the layout follows its size.
 WireGuard or OpenVPN, any provider (Mullvad, Proton, AirVPN, others). Set it up once; it keeps itself working.
 
-<p align="center"><img src="docs/dashboard.svg" alt="The vpn-lxc dashboard" width="90%"></p>
+<p align="center"><img src="docs/dashboard.svg" alt="The pvm dashboard" width="90%"></p>
 
 ## Install
 
 Run on the Proxmox host as root:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Kalinewb/vpn-lxc/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/Kalinewb/pvm/main/install.sh | bash
 ```
 
-Then start it with `vpn-lxc`. Keep it current with `vpn-lxc update` (`vpn-lxc update --check` only looks).
-The installer downloads one file and checks its SHA-256 against `dist/vpn-lxc.sh.sha256` before installing to `/usr/local/sbin/vpn-lxc`.
-Uninstall: `curl -fsSL https://raw.githubusercontent.com/Kalinewb/vpn-lxc/main/install.sh | bash -s -- --uninstall`.
-Prefer to read it first? The whole tool is [`dist/vpn-lxc.sh`](dist/vpn-lxc.sh).
+Then start it with `pvm` or `vpn`, in any capitals (`PVM`, `Vpn`, ...). Keep it current with `pvm update` (`pvm update --check` only looks).
+The installer downloads one file and checks its SHA-256 against `dist/pvm.sh.sha256` before installing to `/usr/local/sbin/pvm`.
+Coming from the old name (vpn-lxc)? Installing or updating moves your settings, saved configs and watchdog over, and `vpn-lxc` keeps working as another name for `pvm`.
+Uninstall: `curl -fsSL https://raw.githubusercontent.com/Kalinewb/pvm/main/install.sh | bash -s -- --uninstall`.
+Prefer to read it first? The whole tool is [`dist/pvm.sh`](dist/pvm.sh).
 
 Requirements: Proxmox VE (developed and tested on 9.x), containers running Debian or Ubuntu, and a WireGuard or OpenVPN config per connection from your provider.
 
@@ -42,27 +43,27 @@ Both modes ask **Express** (default: just the VPN config and, for a gateway, a n
 
 ## Use
 
-    vpn-lxc              dashboard + menu (arrow keys, Enter; b = back, q = quit)
-    vpn-lxc dashboard    print the dashboard once
-    vpn-lxc live         auto-refreshing dashboard
-    vpn-lxc status 126   full leak / kill-switch check of one container
-    vpn-lxc switch 126 backup
-    vpn-lxc watchdog     one watchdog round (a systemd timer runs this every 2 minutes)
-    vpn-lxc update       install the latest version
-    vpn-lxc version
+    pvm              dashboard + menu (arrow keys, Enter; b = back, q = quit)
+    pvm dashboard    print the dashboard once
+    pvm live         auto-refreshing dashboard
+    pvm status 126   full leak / kill-switch check of one container
+    pvm switch 126 backup
+    pvm watchdog     one watchdog round (a systemd timer runs this every 2 minutes)
+    pvm update       install the latest version
+    pvm version
 
 ## Layout
 
     src/*.sh           host-side code, in load order
     src/payload/       scripts and units that run inside the containers
-    build.sh           joins everything into dist/vpn-lxc.sh (the file you install)
+    build.sh           joins everything into dist/pvm.sh (the file you install)
     check.sh           syntax + ShellCheck + build
     tests/unit.sh      function-level tests (run on a Proxmox host so nft can check the firewalls)
     tests/drive.py     drives the full-screen app in a pseudo terminal
     tests/fake-*.py    stand-ins for ntfy/Gotify and the qBittorrent WebUI
     docs/              the pictures above (docs/make-art.py regenerates them; all sample data)
 
-Edit `src/`, never `dist/`. Run `./check.sh && sudo bash tests/unit.sh dist/vpn-lxc.sh`, then `./build.sh` before committing.
+Edit `src/`, never `dist/`. Run `./check.sh && sudo bash tests/unit.sh dist/pvm.sh`, then `./build.sh` before committing.
 
 ## License
 

@@ -1,10 +1,10 @@
 #!/bin/bash
-# Joins src/*.sh and the container-side files in src/payload/ into one script: dist/vpn-lxc.sh.
+# Joins src/*.sh and the container-side files in src/payload/ into one script: dist/pvm.sh.
 # The result is what you copy to the Proxmox host. Edit src/, never dist/.
 set -euo pipefail
 cd "$(dirname "$0")"
-out=${1:-dist/vpn-lxc.sh}
-EOFTAG=VPNLXC_PAYLOAD_EOF
+out=${1:-dist/pvm.sh}
+EOFTAG=PVM_PAYLOAD_EOF
 
 emit_payload() {
     local f
@@ -40,4 +40,10 @@ bash -n "$out"
 chmod 755 "$out"
 
 ( cd "$(dirname "$out")" && sha256sum "$(basename "$out")" > "$(basename "$out").sha256" )
+# installs made under the old name (vpn-lxc) update from the old file name: keep it as an identical copy
+if [ "$(basename "$out")" = pvm.sh ]; then
+    legacy="$(dirname "$out")/vpn-lxc.sh"
+    cp "$out" "$legacy"
+    ( cd "$(dirname "$out")" && sha256sum vpn-lxc.sh > vpn-lxc.sh.sha256 )
+fi
 echo "built $out ($(wc -l < "$out") lines)"
