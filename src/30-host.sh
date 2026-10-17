@@ -4,7 +4,7 @@
 STAGE=""
 cleanup() { cur_show; rm -f "$CT_CACHE" "$CT_CACHE.tmp"; [ -n "$STAGE" ] && rm -rf "$STAGE"; return 0; }
 trap cleanup EXIT
-trap 'exit 130' INT TERM
+trap 'exit 130' INT TERM HUP   # closing the terminal must still clean the temp dir (it can hold configs)
 new_stage() { [ -n "$STAGE" ] && return 0; STAGE=$(mktemp -d /tmp/vpn-lxc.XXXXXX) || die "could not create a temp dir"; }
 
 cexec()      { local ct=$1; shift; pct exec "$ct" -- "$@"; }

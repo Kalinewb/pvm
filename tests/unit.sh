@@ -99,5 +99,37 @@ list=$'system  debian-13-standard_13.6-1_amd64.tar.zst  amd64\nsystem  debian-13
 pick=$(awk '{print $2}' <<<"$list" | grep -E "^debian-13-standard_.*_amd64\.tar" | sort -V | tail -n 1)
 eq "template pick" "$pick" debian-13-standard_13.6-1_amd64.tar.zst
 
+
+# ── one config, one connection ──
+reg_set 501 NAME alpha; reg_set 501 ROLE tunnel; reg_set 501 FPS "$(key_fp "$T/wg.conf") deadbeef00000000"
+eq "owner found" "$(fp_owner "$(key_fp "$T/wg.conf")")" "501 alpha"
+eq "own config is not a conflict" "$(fp_owner "$(key_fp "$T/wg.conf")" 501 || echo none)" none
+eq "backup fp also counts" "$(fp_owner deadbeef00000000)" "501 alpha"
+declare -A V=(); NT=0
+V[gw.primary.fp]=aaaa
+eq "same setup, other slot" "$(fp_conflict gw backup aaaa x)" "the primary config of this same setup"
+NT=2; V[1.ct]=201; V[1.name]=a; V[1.primary.fp]=bbbb; V[2.ct]=202; V[2.name]=b
+eq "other target in the same run" "$(fp_conflict 2 primary bbbb x)" "CT 201 a (in this same setup)"
+fp_conflict 1 primary bbbb x >/dev/null && bad "a target conflicts with itself" || ok
+mkdir -p "$LIB"; cp "$T/wg.conf" "$LIB/one.conf"; printf 'KIND=wireguard\nPROVIDER=proton\nENDPOINTS=203.0.113.9:51820/udp\n' > "$LIB/one.meta"
+eq "library fp = key fp" "$(lib_fp one)" "$(key_fp "$T/wg.conf")"
+
+
+# ── several named gateways ──
+ct_ids() { echo "100 101"; }; ct_name() { case $1 in 100) echo web;; 101) echo vpn-gateway;; esac; }
+reg_set 601 ROLE gateway; reg_set 601 NAME media; reg_set 601 VPN_NET 10.10.10.0/24
+reg_set 602 ROLE gateway; reg_set 602 NAME private; reg_set 602 VPN_NET 10.10.11.0/24
+reg_set 603 ROLE client; reg_set 603 GATEWAY 601; reg_set 604 ROLE client; reg_set 604 GATEWAY 602
+eq "gateway list" "$(gateway_ids | tr '\n' ' ')" "601 602 "
+eq "clients of a gateway" "$(gateway_clients_of 601 | tr '\n' ' ')" "603 "
+name_taken media && ok || bad "registered gateway name should be taken"
+name_taken web && ok || bad "container hostname should be taken"
+name_taken fresh && bad "unused name reported taken" || ok
+eq "next free gateway name" "$(suggest_gw_name)" "vpn-gateway-2"
+declare -A V=([lan_net]=192.168.1.0/24)
+eq "next free vpn network" "$(free_vpnnet)" "10.10.12.0/24"
+v_vpnnet 10.10.10.0/24 >/dev/null 2>&1 && bad "network of another gateway accepted" || ok
+eq "free network accepted" "$(v_vpnnet 10.10.12.0/24)" "10.10.12.0/24"
+
 echo "passed $pass, failed $failn"
 [ "$failn" = 0 ]

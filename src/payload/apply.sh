@@ -13,6 +13,7 @@ ROLE=$(cfg ROLE); PROTO=$(cfg PROTO); VPN_IF=$(cfg VPN_IF); UNIT=$(cfg TUNNEL_UN
 APPS=$(cfg APPS); PF_MODE=$(cfg PF_MODE); PF_PORT=$(cfg PF_PORT)
 DNS_PRIMARY=$(cfg DNS_PRIMARY); RETIRE=$(cfg RETIRE_LEGACY)
 QBIT_SYNC=$(cfg QBIT_SYNC); KEEP_CRED=$(cfg KEEP_QBIT_CRED); VPNNET_IF=$(cfg VPNNET_IF)
+FW_ONLY=$(cfg FW_ONLY)   # 1 = only reload the firewall / port forwarding, leave the tunnel running
 BK=/etc/vpnguard/backup/$(date +%Y%m%d-%H%M%S)
 
 nft -c -f "$S/vpnguard.nft" || fail "the generated firewall failed nft's check, nothing was changed"
@@ -39,12 +40,14 @@ install -m 644 "$S/dropin-nftables.conf" /etc/systemd/system/nftables.service.d/
 for f in vpn-status vpnguard-dns vpnguard-switch vpnguard-ovpn-up vpnguard-qbit-port vpnguard-natpmp; do
     install -m 755 "$S/$f" "/usr/local/sbin/$f"
 done
-rm -rf /etc/vpnguard/slots
-install -d -m 700 /etc/vpnguard/slots
-for f in "$S"/slot-*; do
-    [ -e "$f" ] || continue
-    install -m 600 "$f" "/etc/vpnguard/slots/${f##*/slot-}"
-done
+if [ "$FW_ONLY" != 1 ]; then
+    rm -rf /etc/vpnguard/slots
+    install -d -m 700 /etc/vpnguard/slots
+    for f in "$S"/slot-*; do
+        [ -e "$f" ] || continue
+        install -m 600 "$f" "/etc/vpnguard/slots/${f##*/slot-}"
+    done
+fi
 
 # one target that means "the tunnel is up", whatever the protocol
 cat > /etc/systemd/system/vpnguard-tunnel.target <<EOF
@@ -110,11 +113,16 @@ systemctl daemon-reload
 
 # firewall first: from here on nothing leaves except through the tunnel
 systemctl enable nftables >/dev/null 2>&1
-systemctl restart nftables || fail "the firewall did not load: journalctl -u nftables"
+if [ "$FW_ONLY" = 1 ]; then
+    # restarting the service would restart the tunnel unit that requires it: swap the rules in place instead (one atomic step)
+    nft -f /etc/nftables.conf || fail "the firewall did not load, the previous rules are still active"
+else
+    systemctl restart nftables || fail "the firewall did not load: journalctl -u nftables"
+fi
 nft list table inet vpnguard >/dev/null 2>&1 || fail "the firewall table is missing after loading"
 step "kill switch firewall active (default-deny)"
 
-if [ "$RETIRE" = 1 ]; then
+if [ "$RETIRE" = 1 ] && [ "$FW_ONLY" != 1 ]; then
     for t in iptables ip6tables; do
         command -v "$t" >/dev/null 2>&1 || continue
         "$t" -F; "$t" -X
@@ -124,6 +132,7 @@ if [ "$RETIRE" = 1 ]; then
     step "old iptables rules retired"
 fi
 
+if [ "$FW_ONLY" != 1 ]; then
 # swap the tunnel
 for a in $APPS; do systemctl stop "$a" 2>/dev/null; done
 systemctl stop vpnguard-natpmp 2>/dev/null
@@ -175,6 +184,7 @@ for a in $APPS; do
     if systemctl start "$a"; then step "started ${a%.service}"
     else warn "${a%.service} did not start: journalctl -u $a"; fi
 done
+fi   # FW_ONLY
 
 case $PF_MODE in
     static)

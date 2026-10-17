@@ -2,7 +2,25 @@
 #  Gateway mode: one VPN container + a private bridge
 # ════════════════════════════════════════════════════════════
 
-existing_gateway() { local id; for id in $(reg_ids); do [ "$(reg_get "$id" ROLE)" = gateway ] && { echo "$id"; return; }; done; }
+gateway_ids() { local id; for id in $(reg_ids); do [ "$(reg_get "$id" ROLE)" = gateway ] && echo "$id"; done; }
+gateway_clients_of() { local id; for id in $(reg_ids); do [ "$(reg_get "$id" ROLE)" = client ] && [ "$(reg_get "$id" GATEWAY)" = "$1" ] && echo "$id"; done; }
+# names the user gave to gateways (and every container hostname), so a new one can't clash
+name_taken() { local id n; for id in $(reg_ids); do [ "$id" = "${V[gw.ct]:-}" ] && continue; [ "$(reg_get "$id" NAME)" = "$1" ] && return 0; done; for id in $(ct_ids); do [ "$id" = "${V[gw.ct]:-}" ] && continue; [ "$(ct_name "$id")" = "$1" ] && return 0; done; return 1; }
+suggest_gw_name() { local n=1 cand=vpn-gateway; while name_taken "$cand"; do n=$((n + 1)); cand=vpn-gateway-$n; done; echo "$cand"; }
+v_gwname() { VERR="that name is already used by a container or another gateway"; v_host "$1" >/dev/null || { VERR="use letters, digits and - only"; return 1; }; ! name_taken "$1" && printf '%s' "$1"; }
+# a VPN network no other gateway uses (10.10.10.0/24, then 10.10.11.0/24, ...)
+used_vpnnets() { local id; for id in $(gateway_ids); do [ "$id" = "${V[gw.ct]:-}" ] || reg_get "$id" VPN_NET; done; }
+free_vpnnet() {
+    local n net used
+    used=" $(used_vpnnets | tr '\n' ' ') "
+    for n in $(seq 10 99); do
+        net=10.10.$n.0/24
+        [[ $used == *" $net "* ]] && continue
+        [ "$(net_prefix "$net")" = "$(net_prefix "${V[lan_net]:-x.x.x.0/24}")" ] && continue
+        ip route show 2>/dev/null | grep -q "^10\.10\.$n\." && continue
+        echo "$net"; return
+    done
+}
 bridge_exists()   { ip link show "$1" >/dev/null 2>&1 || grep -Eq "^(auto|iface)[[:space:]]+$1([[:space:]]|$)" "$IFACES_FILE" 2>/dev/null; }
 free_bridge()     { local n; for n in $(seq 1 99); do bridge_exists "vmbr$n" || { echo "vmbr$n"; return; }; done; }
 net_prefix()      { echo "${1%.*/*}"; }   # 10.10.10.0/24 → 10.10.10
@@ -13,6 +31,7 @@ v_vpnnet() {
     [[ $1 =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)\.0/24$ ]] || return 1
     is_ip4 "${1%/*}" || return 1
     [ "$(net_prefix "$1")" = "$(net_prefix "${V[lan_net]:-x.x.x.0/24}")" ] && return 1
+    [[ " $(used_vpnnets | tr '\n' ' ') " == *" $1 "* ]] && { VERR="another gateway already uses $1"; return 1; }
     printf '%s' "$1"
 }
 v_newct() { VERR="that ID is taken or isn't a number"; [[ $1 =~ ^[0-9]{3,9}$ ]] && ! ct_exists "$1" && printf '%s' "$1"; }
@@ -28,7 +47,9 @@ v_gwlan() {
 suggest_gw_ip() {
     local pre i len=${V[lan_net]#*/}
     pre=$(net_prefix "${V[lan_net]}")
+    local mine; mine=" $(for g in $(gateway_ids); do reg_get "$g" LAN_ADDR; done | sed 's#/.*##' | tr '\n' ' ') "
     for i in 250 249 248 247 246 245 240 230 220 210 200; do
+        [[ $mine == *" $pre.$i "* ]] && continue
         ping -c 1 -W 1 "$pre.$i" >/dev/null 2>&1 || { echo "$pre.$i/$len"; return; }
     done
     echo dhcp
@@ -65,14 +86,24 @@ gw_diagram() {
 
 gw_intro() {
     FLOW="VPN gateway"; CONTEXT=""
-    local g; g=$(existing_gateway)
+    local g="" gids; gids=$(gateway_ids)
+    if [ -n "$gids" ]; then
+        page "VPN gateways" "Each gateway is its own VPN connection with its own name, private bridge and containers. Pick one to change, or make another."
+        local -a gi=(); local x
+        for x in $gids; do gi+=("$x|$(reg_get "$x" NAME)|$(reg_get "$x" PROVIDER) · $(gateway_clients_of "$x" | wc -l) containers · $(reg_get "$x" BRIDGE) · $(reg_get "$x" LAN_ADDR)"); done
+        gi+=("new|New gateway|another VPN connection with its own name and bridge")
+        pick g "Which gateway?" "${V[pick_gw]:-new}" "${gi[@]}" || return
+        [ "$g" = new ] && g=""
+        V[pick_gw]=${g:-new}
+    fi
+    for x in name ct bridge net lanaddr; do unset "V[gw.$x]"; done
     if [ -n "$g" ]; then
-        V[gw.mode]=reconfig; V[gw.ct]=$g; V[gw.name]=$(ct_name "$g")
+        V[gw.mode]=reconfig; V[gw.ct]=$g; V[gw.name]=$(reg_get "$g" NAME); V[gw.name]=${V[gw.name]:-$(ct_name "$g")}
         V[gw.bridge]=$(reg_get "$g" BRIDGE); V[gw.net]=$(reg_get "$g" VPN_NET); V[gw.lanaddr]=$(reg_get "$g" LAN_ADDR)
-        page "VPN gateway" "Your gateway is CT $g (${V[gw.name]}). You can change its VPN, which containers sit behind it, and what's published to your home network."
+        page "Gateway ${V[gw.name]}" "CT $g. You can change its VPN, which containers sit behind it, and what's published to your home network."
     else
         V[gw.mode]=create
-        page "VPN gateway" "A small container becomes your VPN router. Every container you plug into its private bridge goes through the VPN, with the kill switch outside the apps, so nothing inside them can route around it."
+        page "New VPN gateway" "A small container becomes a VPN router. Every container you plug into its private bridge goes through the VPN, with the kill switch outside the apps, so nothing inside them can route around it."
     fi
     [ -z "${V[lan_net]:-}" ] && V[lan_net]=$(ip -4 route show dev "$(ip -4 route show default | awk '{print $5; exit}')" scope link 2>/dev/null | awk '{print $1; exit}')
     gw_diagram
@@ -83,6 +114,15 @@ gw_intro() {
         "custom|Custom|choose the bridge, network, ports and storage yourself" || return
     V[mode]=$mode
     echo
+    if [ "${V[gw.mode]}" = reconfig ]; then
+        local newname
+        field newname "Name of this gateway" "${V[gw.name]}" v_gwname || return
+        V[gw.newname]=$newname
+    else
+        local newname
+        field newname "Name for the new gateway (this is also its hostname)" "${V[gw.name]:-$(suggest_gw_name)}" v_gwname || return
+        V[gw.name]=$newname
+    fi
     if [ "${V[gw.mode]}" = reconfig ]; then
         if [ "$(ct_status "$g")" != running ]; then run_task "starting CT $g" pct start "$g" || { pause; return 1; }; sleep 3; fi
         detect_task "looking inside the gateway" gw "$g" || { bad "could not read the gateway's setup"; pause; return 1; }
@@ -104,8 +144,7 @@ gw_intro() {
 gw_bridge() {
     [ "${V[gw.mode]}" = reconfig ] && return 3
     if is_express; then
-        local xbr=${V[gw.bridge]:-$(free_bridge)} xnet=${V[gw.net]:-10.10.10.0/24}
-        [ "$(net_prefix "$xnet")" = "$(net_prefix "${V[lan_net]}")" ] && xnet=10.77.77.0/24
+        local xbr=${V[gw.bridge]:-$(free_bridge)} xnet=${V[gw.net]:-$(free_vpnnet)}
         V[gw.bridge]=$xbr; V[gw.net]=$xnet; V[gw.ip]="$(net_prefix "$xnet").1"
         return 3
     fi
@@ -113,7 +152,7 @@ gw_bridge() {
     page "Private bridge" "A new Proxmox bridge with no physical port. Containers on it can only reach the internet through the gateway's tunnel."
     local br net
     field br "Bridge name" "${V[gw.bridge]:-$(free_bridge)}" v_newbridge || return
-    field net "VPN network" "${V[gw.net]:-10.10.10.0/24}" v_vpnnet || return
+    field net "VPN network" "${V[gw.net]:-$(free_vpnnet)}" v_vpnnet || return
     V[gw.bridge]=$br; V[gw.net]=$net; V[gw.ip]="$(net_prefix "$net").1"
     echo
     note "the gateway gets ${V[gw.ip]}, containers get .10 and up, DHCP hands out .100–.199"
@@ -128,13 +167,13 @@ gw_container() {
     page "Gateway container" "A tiny Debian container (256 MB RAM, 2 GB disk) that runs the tunnel. It needs a fixed address on your home network: that's where you'll open qBittorrent, Prowlarr and so on."
     local id name lan store
     if is_express; then
-        id=${V[gw.ct]:-$(pvesh get /cluster/nextid 2>/dev/null)}; name=${V[gw.name]:-vpn-gateway}
+        id=${V[gw.ct]:-$(pvesh get /cluster/nextid 2>/dev/null)}; name=${V[gw.name]:-$(suggest_gw_name)}
         if ! { [[ $id =~ ^[0-9]{3,9}$ ]] && ! ct_exists "$id"; }; then bad "container ID $id is not free"; pause; return 1; fi
         note "found a free address on ${V[lan_net]}; reserve it in your router's DHCP if you can"
         field lan "LAN address for the gateway (or dhcp)" "${V[gw.lanaddr]:-$(suggest_gw_ip)}" v_gwlan || return
     else
         field id "Container ID" "${V[gw.ct]:-$(pvesh get /cluster/nextid 2>/dev/null)}" v_newct || return
-        field name "Hostname" "${V[gw.name]:-vpn-gateway}" v_host || return
+        name=${V[gw.name]:-$(suggest_gw_name)}
         note "pick a free address on ${V[lan_net]}; reserve it in your router's DHCP if you can"
         field lan "LAN address for the gateway (or dhcp)" "${V[gw.lanaddr]:-$(suggest_gw_ip)}" v_gwlan || return
     fi
@@ -166,7 +205,8 @@ gw_clients() {
         name=$(ct_name "$id")
         on=0; case " ${V[gw.clients]:-} " in *" $id "*) on=1 ;; esac
         case $role in
-            client) desc="behind the gateway · $(reg_get "$id" IP)" ;;
+            client) [ "$(reg_get "$id" GATEWAY)" = "${V[gw.ct]}" ] || continue
+                    desc="behind this gateway · $(reg_get "$id" IP)" ;;
             tunnel) desc="has its own VPN now → gets converted" ;;
             gateway) continue ;;
             *) desc=$(ct_status "$id") ;;

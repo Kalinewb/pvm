@@ -54,7 +54,7 @@ dashboard() {   # dashboard [cached] : "cached" draws what probe_all already col
     ids=$(reg_ids)
     if [ -z "$ids" ]; then
         box_top "Your containers"
-        box_row "${GR}Nothing is protected yet. Choose ${R}${B}Protect containers${R}${GR} or ${R}${B}VPN gateway${R}${GR}: Express takes about a minute.${R}"
+        box_row "${GR}Nothing is protected yet. Choose ${R}${B}Protect containers${R}${GR} or ${R}${B}VPN gateways${R}${GR}: Express takes about a minute.${R}"
         box_bot
         return
     fi

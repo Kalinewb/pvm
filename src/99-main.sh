@@ -13,7 +13,8 @@ main_menu() {
         echo
         pick m "What now?" "${LAST_CHOICE:-tunnel}" \
             "tunnel|Protect containers|each one gets its own VPN" \
-            "gateway|VPN gateway|one VPN for many containers, on a private bridge" \
+            "gateway|VPN gateways|named gateways: one VPN for many containers, on a private bridge" \
+            "ports|Port forwarding|what the VPN forwards in, and what your home network can reach" \
             "live|Live dashboard|auto-refreshing view of everything" \
             "status|Check a container|full leak and kill-switch test" \
             "switch|Switch config|move a tunnel to its backup (or back)" \
@@ -28,6 +29,7 @@ main_menu() {
             tunnel)   V=(); D=(); tunnel_wizard ;;
             gateway)  V=(); D=(); gateway_wizard ;;
             status)   status_screen ;;
+            ports)    port_screen ;;
             live)     live_screen ;;
             switch)   switch_screen ;;
             settings) settings_screen ;;

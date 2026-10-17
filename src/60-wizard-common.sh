@@ -10,7 +10,12 @@ is_express() { [ "${V[mode]:-express}" = express ]; }
 express_fill() {   # express_fill TARGET   (per-container targets; the gateway has its own)
     local t=$1
     V[$t.lan_mode]=open; V[$t.lan_tcp]=""; V[$t.lan_out]=""
-    V[$t.apps]=${V[$t.apps]:-${D[$t.CUR_APPS]:-${D[$t.APP_SERVICES]:-}}}
+    V[$t.apps_all]=${V[$t.apps_all]:-${D[$t.CUR_APPS]:-${D[$t.APP_SERVICES]:-}}}
+    # stopping apps with the tunnel is optional; if this container was set up before without them, keep it that way
+    if [ -z "${V[$t.tie]:-}" ]; then
+        if [ "${D[$t.HAS_SETUP]:-}" = 1 ] && [ -z "${D[$t.CUR_APPS]:-}" ]; then V[$t.tie]=n; else V[$t.tie]=y; fi
+    fi
+    if [ "${V[$t.tie]}" = y ]; then V[$t.apps]=${V[$t.apps_all]}; else V[$t.apps]=""; fi
 }
 
 ctx() {
@@ -75,7 +80,7 @@ pg_config() {   # pg_config TARGET [primary|backup]
             [ -n "${V[$t.backup.kind]:-}" ] || [ "${D[$t.HAS_BACKUP]:-}" = 1 ] && defb=y
             yn want "Add a backup config?" "$defb" || return
             if [ "$want" = n ]; then
-                for k in kind file endpoints dns label src user pass; do unset "V[$t.backup.$k]"; done
+                for k in kind file endpoints dns label src user pass fp lib; do unset "V[$t.backup.$k]"; done
                 return 0
             fi
         else
@@ -109,10 +114,17 @@ pg_config() {   # pg_config TARGET [primary|backup]
             lib)
                 echo
                 local -a li=()
-                local n
+                local n who busy=""
                 while IFS= read -r n; do
+                    if who=$(fp_conflict "$t" "$s" "$(lib_fp "$n")" "${V[$t.ct]:-}"); then busy="$busy\n$n → $who"; continue; fi
                     li+=("$n|$n|$(lib_meta "$n" KIND) · $(provider_label "$(lib_meta "$n" PROVIDER)") · $(lib_meta "$n" ENDPOINTS | awk '{print $1}')")
                 done < <(lib_names)
+                if [ -n "$busy" ]; then
+                    note "not offered, already in use (one connection per config):"
+                    while IFS= read -r who; do [ -n "$who" ] && printf '        %s%s%s\n' "$GR" "$who" "$R"; done <<<"$(printf '%b' "$busy")"
+                    echo
+                fi
+                if [ ${#li[@]} -eq 0 ]; then bad "every saved config is in use: paste a new one or add one in Settings"; pause; continue; fi
                 pick lname "Which one?" "${V[$t.$s.lib]:-}" "${li[@]}" || { [ $? = 2 ] && return 2; continue; }
                 tr -d '\r' < "$LIB/$lname.conf" > "$f"
                 if [ -f "$LIB/$lname.auth" ]; then user=$(sed -n 1p "$LIB/$lname.auth"); pass=$(sed -n 2p "$LIB/$lname.auth"); fi
@@ -129,6 +141,12 @@ pg_config() {   # pg_config TARGET [primary|backup]
 
         if ! analyze_config "$t" "$s" "$f"; then
             bad "$VERR"; pause; continue
+        fi
+        V[$t.$s.fp]=$(cfg_fp_of "$t" "$s")
+        local why
+        if why=$(fp_conflict "$t" "$s" "${V[$t.$s.fp]}" "${V[$t.ct]:-}"); then
+            bad "That config is already used by $why. Every connection needs its own config (a WireGuard key holds one session)."
+            unset "V[$t.$s.fp]"; pause; continue
         fi
         if [ -z "${V[$t.provider]:-}" ]; then
             V[$t.provider]=""

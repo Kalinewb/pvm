@@ -90,10 +90,11 @@ stage_common() {   # stage_common TARGET DIR
              vpnguard-natpmp.service vpnguard-openvpn.service nftables.conf dropin-nftables.conf dhclient-vpnguard; do
         cp "$STAGE/payload/$f" "$d/$f"
     done
-    render_slots "$t" "$d" || return 1
+    [ "${FW_ONLY:-0}" = 1 ] || render_slots "$t" "$d" || return 1
     {
         echo "RETIRE_LEGACY=$([ "${D[$t.LEGACY_RULES]:-0}${D[$t.LEGACY6_RULES]:-0}" != 00 ] && echo 1 || echo 0)"
         echo "QBIT_SYNC=${V[$t.qbit_sync]:-0}"
+        echo "FW_ONLY=${FW_ONLY:-0}"
         echo "KEEP_QBIT_CRED=${V[$t.qbit_keep]:-0}"
     } > "$d/apply.env"
     if [ "${V[$t.qbit_sync]:-0}" = 1 ] && [ "${V[$t.qbit_keep]:-0}" != 1 ]; then
@@ -374,6 +375,7 @@ tunnel_apply() {
             local pushed; pushed=$(trim "${RESULTS[DNS]:-}")
             [ -z "${V[$t.primary.dns]:-}" ] && [ -n "$pushed" ] && pct set "$ct" --nameserver "$pushed" >/dev/null 2>&1
             reg_set "$ct" ROLE tunnel; reg_set "$ct" NAME "${V[$t.name]}"
+            reg_set "$ct" FPS "$(echo ${V[$t.primary.fp]:-} ${V[$t.backup.fp]:-})"
             reg_set "$ct" PROVIDER "${V[$t.provider]}"; reg_set "$ct" PROTO "${V[$t.primary.kind]}"
         else
             RES[$t]=fail
@@ -564,7 +566,14 @@ gateway_apply() {
         bad "the gateway didn't come up, so no containers were moved"
         pause; return 1
     fi
+    if [ -n "${V[gw.newname]:-}" ] && [ "${V[gw.newname]}" != "${V[gw.name]}" ]; then
+        pct set "$g" --hostname "${V[gw.newname]}" >/dev/null 2>&1
+        cexec "$g" sh -c "echo '${V[gw.newname]}' > /etc/hostname; hostname '${V[gw.newname]}'" >/dev/null 2>&1
+        ok "renamed ${V[gw.name]} → ${V[gw.newname]}"
+        V[gw.name]=${V[gw.newname]}
+    fi
     reg_set "$g" ROLE gateway; reg_set "$g" NAME "${V[gw.name]}"; reg_set "$g" PROVIDER "${V[gw.provider]}"
+    reg_set "$g" FPS "$(echo ${V[gw.primary.fp]:-} ${V[gw.backup.fp]:-})"
     reg_set "$g" PROTO "${V[gw.primary.kind]}"; reg_set "$g" BRIDGE "${V[gw.bridge]}"; reg_set "$g" VPN_NET "${V[gw.net]}"
     [ "${V[gw.mode]}" = create ] && reg_set "$g" LAN_ADDR "${V[gw.lanaddr]}"
 

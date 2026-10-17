@@ -23,7 +23,7 @@ set -o pipefail
 umask 077
 export LC_ALL=C.UTF-8
 
-VERSION="2.1"
+VERSION="2.2"
 REPO_RAW=${VPNLXC_RAW:-https://raw.githubusercontent.com/Kalinewb/vpn-lxc}
 SELF=$(readlink -f "$0" 2>/dev/null || echo "$0")
 ETC=${VPNLXC_ETC:-/etc/vpn-lxc}
@@ -424,11 +424,19 @@ list_move() {   # list_move DELTA  (uses cur top vis n of the caller)
 # typing digits jumps to that number
 list_digits() {   # list_digits CHAR : returns 0 if it moved the highlight
     [[ $1 =~ ^[0-9]$ ]] || return 1
-    local t="${numbuf}$1"
-    if [ "$t" -ge 1 ] && [ "$t" -le "$n" ]; then numbuf=$t
-    elif [ "$1" -ge 1 ] && [ "$1" -le "$n" ]; then numbuf=$1
-    else return 0; fi
-    cur=$((numbuf - 1))
+    local t="${numbuf}$1" j prefix=0
+    for ((j = 0; j < n; j++)); do
+        local key=${ids[j]:-${keys[j]:-}}
+        # a typed container ID (or any item key) wins over a list position
+        if [ "$key" = "$t" ]; then numbuf=$t; cur=$j; prefix=2; break; fi
+        [[ $key == "$t"* ]] && prefix=1
+    done
+    if [ "$prefix" = 1 ]; then numbuf=$t; return 0; fi            # still typing an ID: wait for the next digit
+    if [ "$prefix" = 0 ]; then
+        if [ "$t" -ge 1 ] && [ "$t" -le "$n" ]; then numbuf=$t; cur=$((t - 1))
+        elif [ "$1" -ge 1 ] && [ "$1" -le "$n" ]; then numbuf=$1; cur=$(($1 - 1))
+        else numbuf=""; return 0; fi
+    fi
     [ "$cur" -lt "$top" ] && top=$cur
     [ "$cur" -ge $((top + vis)) ] && top=$((cur - vis + 1))
     return 0
@@ -759,7 +767,7 @@ read_kv_into() {   # read_kv_into ARRAY prefix
 STAGE=""
 cleanup() { cur_show; rm -f "$CT_CACHE" "$CT_CACHE.tmp"; [ -n "$STAGE" ] && rm -rf "$STAGE"; return 0; }
 trap cleanup EXIT
-trap 'exit 130' INT TERM
+trap 'exit 130' INT TERM HUP   # closing the terminal must still clean the temp dir (it can hold configs)
 new_stage() { [ -n "$STAGE" ] && return 0; STAGE=$(mktemp -d /tmp/vpn-lxc.XXXXXX) || die "could not create a temp dir"; }
 
 cexec()      { local ct=$1; shift; pct exec "$ct" -- "$@"; }
@@ -1087,6 +1095,7 @@ ROLE=$(cfg ROLE); PROTO=$(cfg PROTO); VPN_IF=$(cfg VPN_IF); UNIT=$(cfg TUNNEL_UN
 APPS=$(cfg APPS); PF_MODE=$(cfg PF_MODE); PF_PORT=$(cfg PF_PORT)
 DNS_PRIMARY=$(cfg DNS_PRIMARY); RETIRE=$(cfg RETIRE_LEGACY)
 QBIT_SYNC=$(cfg QBIT_SYNC); KEEP_CRED=$(cfg KEEP_QBIT_CRED); VPNNET_IF=$(cfg VPNNET_IF)
+FW_ONLY=$(cfg FW_ONLY)   # 1 = only reload the firewall / port forwarding, leave the tunnel running
 BK=/etc/vpnguard/backup/$(date +%Y%m%d-%H%M%S)
 
 nft -c -f "$S/vpnguard.nft" || fail "the generated firewall failed nft's check, nothing was changed"
@@ -1113,12 +1122,14 @@ install -m 644 "$S/dropin-nftables.conf" /etc/systemd/system/nftables.service.d/
 for f in vpn-status vpnguard-dns vpnguard-switch vpnguard-ovpn-up vpnguard-qbit-port vpnguard-natpmp; do
     install -m 755 "$S/$f" "/usr/local/sbin/$f"
 done
-rm -rf /etc/vpnguard/slots
-install -d -m 700 /etc/vpnguard/slots
-for f in "$S"/slot-*; do
-    [ -e "$f" ] || continue
-    install -m 600 "$f" "/etc/vpnguard/slots/${f##*/slot-}"
-done
+if [ "$FW_ONLY" != 1 ]; then
+    rm -rf /etc/vpnguard/slots
+    install -d -m 700 /etc/vpnguard/slots
+    for f in "$S"/slot-*; do
+        [ -e "$f" ] || continue
+        install -m 600 "$f" "/etc/vpnguard/slots/${f##*/slot-}"
+    done
+fi
 
 # one target that means "the tunnel is up", whatever the protocol
 cat > /etc/systemd/system/vpnguard-tunnel.target <<EOF
@@ -1184,11 +1195,16 @@ systemctl daemon-reload
 
 # firewall first: from here on nothing leaves except through the tunnel
 systemctl enable nftables >/dev/null 2>&1
-systemctl restart nftables || fail "the firewall did not load: journalctl -u nftables"
+if [ "$FW_ONLY" = 1 ]; then
+    # restarting the service would restart the tunnel unit that requires it: swap the rules in place instead (one atomic step)
+    nft -f /etc/nftables.conf || fail "the firewall did not load, the previous rules are still active"
+else
+    systemctl restart nftables || fail "the firewall did not load: journalctl -u nftables"
+fi
 nft list table inet vpnguard >/dev/null 2>&1 || fail "the firewall table is missing after loading"
 step "kill switch firewall active (default-deny)"
 
-if [ "$RETIRE" = 1 ]; then
+if [ "$RETIRE" = 1 ] && [ "$FW_ONLY" != 1 ]; then
     for t in iptables ip6tables; do
         command -v "$t" >/dev/null 2>&1 || continue
         "$t" -F; "$t" -X
@@ -1198,6 +1214,7 @@ if [ "$RETIRE" = 1 ]; then
     step "old iptables rules retired"
 fi
 
+if [ "$FW_ONLY" != 1 ]; then
 # swap the tunnel
 for a in $APPS; do systemctl stop "$a" 2>/dev/null; done
 systemctl stop vpnguard-natpmp 2>/dev/null
@@ -1249,6 +1266,7 @@ for a in $APPS; do
     if systemctl start "$a"; then step "started ${a%.service}"
     else warn "${a%.service} did not start: journalctl -u $a"; fi
 done
+fi   # FW_ONLY
 
 case $PF_MODE in
     static)
@@ -1913,6 +1931,42 @@ key_fp() {   # key_fp FILE : short fingerprint of a WireGuard PrivateKey (never 
     awk 'tolower($1) == "privatekey" {sub(/^[^=]*=[ \t]*/, ""); print; exit}' "$1" 2>/dev/null | sha256sum | cut -c1-16
 }
 
+# One connection per config: a WireGuard key can hold a single session, and "different container, different
+# connection" is the point of per-container tunnels. A config's identity is its key (WireGuard) or its
+# server list (OpenVPN). Setups remember theirs in the registry (FPS) so a later session can refuse a repeat.
+cfg_fp_of() {   # cfg_fp_of TARGET SLOT : identity of the config that was just analysed
+    local t=$1 s=$2
+    if [ "${V[$t.$s.kind]}" = wireguard ]; then key_fp "${V[$t.$s.file]}"
+    else printf '%s' "${V[$t.$s.endpoints]}" | tr ' ' '\n' | sort | sha256sum | cut -c1-16; fi
+}
+lib_fp() {   # lib_fp NAME : same identity for a saved config
+    if [ "$(lib_meta "$1" KIND)" = wireguard ]; then key_fp "$LIB/$1.conf"
+    else lib_meta "$1" ENDPOINTS | tr ' ' '\n' | sort | sha256sum | cut -c1-16; fi
+}
+fp_owner() {   # fp_owner FP [EXCEPT_ID] : prints "ID NAME" of the setup that already uses it
+    local fp=$1 ex=${2:-} id
+    [ -n "$fp" ] || return 1
+    for id in $(reg_ids); do
+        [ "$id" = "$ex" ] && continue
+        case " $(reg_get "$id" FPS) " in *" $fp "*) echo "$id $(reg_get "$id" NAME)"; return 0 ;; esac
+    done
+    return 1
+}
+fp_conflict() {   # fp_conflict TARGET SLOT FP EXCEPT_ID : prints who has it, returns 0 if somebody does
+    local t=$1 s=$2 fp=$3 ex=$4 o other i
+    [ -n "$fp" ] || return 1
+    if o=$(fp_owner "$fp" "$ex"); then echo "CT ${o%% *} ${o#* }"; return 0; fi
+    [ "$s" = primary ] && other=backup || other=primary
+    if [ "${V[$t.$other.fp]:-}" = "$fp" ]; then echo "the $other config of this same setup"; return 0; fi
+    for ((i = 1; i <= NT; i++)); do
+        [ "$t" = "$i" ] && continue
+        if [ "${V[$i.primary.fp]:-}" = "$fp" ] || [ "${V[$i.backup.fp]:-}" = "$fp" ]; then
+            echo "CT ${V[$i.ct]} ${V[$i.name]} (in this same setup)"; return 0
+        fi
+    done
+    return 1
+}
+
 guess_provider() {   # guess_provider TARGET SLOT : look at the tunnel addresses
     local d=" ${V[$1.$2.dns]} ${V[$1.$2.addr]} ${V[$1.$2.endpoints]} "
     if   [[ $d =~ \ 10\.2\.0\. ]]; then echo proton
@@ -1957,7 +2011,12 @@ is_express() { [ "${V[mode]:-express}" = express ]; }
 express_fill() {   # express_fill TARGET   (per-container targets; the gateway has its own)
     local t=$1
     V[$t.lan_mode]=open; V[$t.lan_tcp]=""; V[$t.lan_out]=""
-    V[$t.apps]=${V[$t.apps]:-${D[$t.CUR_APPS]:-${D[$t.APP_SERVICES]:-}}}
+    V[$t.apps_all]=${V[$t.apps_all]:-${D[$t.CUR_APPS]:-${D[$t.APP_SERVICES]:-}}}
+    # stopping apps with the tunnel is optional; if this container was set up before without them, keep it that way
+    if [ -z "${V[$t.tie]:-}" ]; then
+        if [ "${D[$t.HAS_SETUP]:-}" = 1 ] && [ -z "${D[$t.CUR_APPS]:-}" ]; then V[$t.tie]=n; else V[$t.tie]=y; fi
+    fi
+    if [ "${V[$t.tie]}" = y ]; then V[$t.apps]=${V[$t.apps_all]}; else V[$t.apps]=""; fi
 }
 
 ctx() {
@@ -2022,7 +2081,7 @@ pg_config() {   # pg_config TARGET [primary|backup]
             [ -n "${V[$t.backup.kind]:-}" ] || [ "${D[$t.HAS_BACKUP]:-}" = 1 ] && defb=y
             yn want "Add a backup config?" "$defb" || return
             if [ "$want" = n ]; then
-                for k in kind file endpoints dns label src user pass; do unset "V[$t.backup.$k]"; done
+                for k in kind file endpoints dns label src user pass fp lib; do unset "V[$t.backup.$k]"; done
                 return 0
             fi
         else
@@ -2056,10 +2115,17 @@ pg_config() {   # pg_config TARGET [primary|backup]
             lib)
                 echo
                 local -a li=()
-                local n
+                local n who busy=""
                 while IFS= read -r n; do
+                    if who=$(fp_conflict "$t" "$s" "$(lib_fp "$n")" "${V[$t.ct]:-}"); then busy="$busy\n$n → $who"; continue; fi
                     li+=("$n|$n|$(lib_meta "$n" KIND) · $(provider_label "$(lib_meta "$n" PROVIDER)") · $(lib_meta "$n" ENDPOINTS | awk '{print $1}')")
                 done < <(lib_names)
+                if [ -n "$busy" ]; then
+                    note "not offered, already in use (one connection per config):"
+                    while IFS= read -r who; do [ -n "$who" ] && printf '        %s%s%s\n' "$GR" "$who" "$R"; done <<<"$(printf '%b' "$busy")"
+                    echo
+                fi
+                if [ ${#li[@]} -eq 0 ]; then bad "every saved config is in use: paste a new one or add one in Settings"; pause; continue; fi
                 pick lname "Which one?" "${V[$t.$s.lib]:-}" "${li[@]}" || { [ $? = 2 ] && return 2; continue; }
                 tr -d '\r' < "$LIB/$lname.conf" > "$f"
                 if [ -f "$LIB/$lname.auth" ]; then user=$(sed -n 1p "$LIB/$lname.auth"); pass=$(sed -n 2p "$LIB/$lname.auth"); fi
@@ -2076,6 +2142,12 @@ pg_config() {   # pg_config TARGET [primary|backup]
 
         if ! analyze_config "$t" "$s" "$f"; then
             bad "$VERR"; pause; continue
+        fi
+        V[$t.$s.fp]=$(cfg_fp_of "$t" "$s")
+        local why
+        if why=$(fp_conflict "$t" "$s" "${V[$t.$s.fp]}" "${V[$t.ct]:-}"); then
+            bad "That config is already used by $why. Every connection needs its own config (a WireGuard key holds one session)."
+            unset "V[$t.$s.fp]"; pause; continue
         fi
         if [ -z "${V[$t.provider]:-}" ]; then
             V[$t.provider]=""
@@ -2346,8 +2418,15 @@ tm_apps() {
         done
         [ "$ok_all" = 1 ] && break
     done
-    V[$t.apps]=${out# }
-    if [[ ${V[$t.apps]} == *qbittorrent* ]] && [ -n "${D[$t.QBIT_IFACE]:-}" ]; then
+    V[$t.apps_all]=${out# }
+    if [ -n "${V[$t.apps_all]}" ]; then
+        echo
+        local tie
+        yn tie "Stop them while the VPN is down, and start them again when it's back? (recommended)" "${V[$t.tie]:-y}" || return
+        V[$t.tie]=$tie
+    fi
+    if [ "${V[$t.tie]:-y}" = y ]; then V[$t.apps]=${V[$t.apps_all]}; else V[$t.apps]=""; fi
+    if [[ ${V[$t.apps_all]} == *qbittorrent* ]] && [ -n "${D[$t.QBIT_IFACE]:-}" ]; then
         local want=wg0; [ "${V[$t.primary.kind]}" = openvpn ] && want=tun0
         [ "${D[$t.QBIT_IFACE]}" != "$want" ] && warn "qBittorrent is bound to ${D[$t.QBIT_IFACE]}; set Options → Advanced → Network interface to $want"
     fi
@@ -2371,7 +2450,9 @@ tm_card() {
         box_row "${GR}From home${R}      ${V[lan_net]} → tcp ${V[$t.lan_tcp]:-none}"
         box_row "${GR}LAN out${R}        ${V[$t.lan_out]:-none}"
     fi
-    box_row "${GR}Tied to VPN${R}    ${V[$t.apps]:-nothing}"
+    if [ -n "${V[$t.apps]:-}" ]; then box_row "${GR}Tied to VPN${R}    ${V[$t.apps]} ${GR}· stop when the VPN drops${R}"
+    elif [ -n "${V[$t.apps_all]:-}" ]; then box_row "${GR}Apps${R}            ${V[$t.apps_all]} ${GR}· keep running when the VPN drops${R}"
+    else box_row "${GR}Tied to VPN${R}    nothing"; fi
     box_row "${GR}Port forward${R}   $pf"
     box_row "${GR}Internet${R}       only through the VPN · IPv6 blocked"
     if [[ ${V[$t.apps]:-} == *qbittorrent* ]] && [ -n "${D[$t.QBIT_IFACE]:-}" ]; then
@@ -2385,19 +2466,22 @@ tm_card() {
 
 tm_review() {
     FLOW="per-container setup"; CONTEXT=""
+    local i tie ask=0
+    if is_express; then
+        for ((i = 1; i <= NT; i++)); do express_fill "$i"; [ -n "${V[$i.apps_all]:-}" ] && ask=1; done
+    fi
+    if [ "$ask" = 1 ]; then
+        page "Apps" "Apps like qBittorrent can be stopped automatically whenever the VPN is down, and started again when it's back. They can't reach the internet while it's down either way; this just stops them retrying."
+        for ((i = 1; i <= NT; i++)); do
+            [ -n "${V[$i.apps_all]:-}" ] || continue
+            yn tie "CT ${V[$i.ct]} ${V[$i.name]}: stop ${V[$i.apps_all]//.service/} while the VPN is down?" "${V[$i.tie]:-y}" || return
+            V[$i.tie]=$tie
+            express_fill "$i"
+        done
+    fi
     page "Review" "Nothing has changed yet. This is what will happen:"
-    local i
     for ((i = 1; i <= NT; i++)); do tm_card "$i"; done
     echo
-    # two containers on one WireGuard key knock each other off the server
-    local -A seen=(); local k
-    for ((i = 1; i <= NT; i++)); do
-        [ "${V[$i.primary.kind]:-}" = wireguard ] || continue
-        k=$(key_fp "${V[$i.primary.file]}"); [ -n "$k" ] || continue
-        if [ -n "${seen[$k]:-}" ]; then
-            warn "CT ${V[$i.ct]} and CT ${seen[$k]} use the same WireGuard key. Most VPNs allow one connection per key, so only one of them will work: give each its own config."
-        else seen[$k]=${V[$i.ct]}; fi
-    done
     local snap go
     yn snap "Take a Proxmox snapshot of each first, so you can roll back?" "${V[snap]:-y}" || return
     V[snap]=$snap
@@ -2438,7 +2522,25 @@ tunnel_wizard() {
 #  Gateway mode: one VPN container + a private bridge
 # ════════════════════════════════════════════════════════════
 
-existing_gateway() { local id; for id in $(reg_ids); do [ "$(reg_get "$id" ROLE)" = gateway ] && { echo "$id"; return; }; done; }
+gateway_ids() { local id; for id in $(reg_ids); do [ "$(reg_get "$id" ROLE)" = gateway ] && echo "$id"; done; }
+gateway_clients_of() { local id; for id in $(reg_ids); do [ "$(reg_get "$id" ROLE)" = client ] && [ "$(reg_get "$id" GATEWAY)" = "$1" ] && echo "$id"; done; }
+# names the user gave to gateways (and every container hostname), so a new one can't clash
+name_taken() { local id n; for id in $(reg_ids); do [ "$id" = "${V[gw.ct]:-}" ] && continue; [ "$(reg_get "$id" NAME)" = "$1" ] && return 0; done; for id in $(ct_ids); do [ "$id" = "${V[gw.ct]:-}" ] && continue; [ "$(ct_name "$id")" = "$1" ] && return 0; done; return 1; }
+suggest_gw_name() { local n=1 cand=vpn-gateway; while name_taken "$cand"; do n=$((n + 1)); cand=vpn-gateway-$n; done; echo "$cand"; }
+v_gwname() { VERR="that name is already used by a container or another gateway"; v_host "$1" >/dev/null || { VERR="use letters, digits and - only"; return 1; }; ! name_taken "$1" && printf '%s' "$1"; }
+# a VPN network no other gateway uses (10.10.10.0/24, then 10.10.11.0/24, ...)
+used_vpnnets() { local id; for id in $(gateway_ids); do [ "$id" = "${V[gw.ct]:-}" ] || reg_get "$id" VPN_NET; done; }
+free_vpnnet() {
+    local n net used
+    used=" $(used_vpnnets | tr '\n' ' ') "
+    for n in $(seq 10 99); do
+        net=10.10.$n.0/24
+        [[ $used == *" $net "* ]] && continue
+        [ "$(net_prefix "$net")" = "$(net_prefix "${V[lan_net]:-x.x.x.0/24}")" ] && continue
+        ip route show 2>/dev/null | grep -q "^10\.10\.$n\." && continue
+        echo "$net"; return
+    done
+}
 bridge_exists()   { ip link show "$1" >/dev/null 2>&1 || grep -Eq "^(auto|iface)[[:space:]]+$1([[:space:]]|$)" "$IFACES_FILE" 2>/dev/null; }
 free_bridge()     { local n; for n in $(seq 1 99); do bridge_exists "vmbr$n" || { echo "vmbr$n"; return; }; done; }
 net_prefix()      { echo "${1%.*/*}"; }   # 10.10.10.0/24 → 10.10.10
@@ -2449,6 +2551,7 @@ v_vpnnet() {
     [[ $1 =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)\.0/24$ ]] || return 1
     is_ip4 "${1%/*}" || return 1
     [ "$(net_prefix "$1")" = "$(net_prefix "${V[lan_net]:-x.x.x.0/24}")" ] && return 1
+    [[ " $(used_vpnnets | tr '\n' ' ') " == *" $1 "* ]] && { VERR="another gateway already uses $1"; return 1; }
     printf '%s' "$1"
 }
 v_newct() { VERR="that ID is taken or isn't a number"; [[ $1 =~ ^[0-9]{3,9}$ ]] && ! ct_exists "$1" && printf '%s' "$1"; }
@@ -2464,7 +2567,9 @@ v_gwlan() {
 suggest_gw_ip() {
     local pre i len=${V[lan_net]#*/}
     pre=$(net_prefix "${V[lan_net]}")
+    local mine; mine=" $(for g in $(gateway_ids); do reg_get "$g" LAN_ADDR; done | sed 's#/.*##' | tr '\n' ' ') "
     for i in 250 249 248 247 246 245 240 230 220 210 200; do
+        [[ $mine == *" $pre.$i "* ]] && continue
         ping -c 1 -W 1 "$pre.$i" >/dev/null 2>&1 || { echo "$pre.$i/$len"; return; }
     done
     echo dhcp
@@ -2501,14 +2606,24 @@ gw_diagram() {
 
 gw_intro() {
     FLOW="VPN gateway"; CONTEXT=""
-    local g; g=$(existing_gateway)
+    local g="" gids; gids=$(gateway_ids)
+    if [ -n "$gids" ]; then
+        page "VPN gateways" "Each gateway is its own VPN connection with its own name, private bridge and containers. Pick one to change, or make another."
+        local -a gi=(); local x
+        for x in $gids; do gi+=("$x|$(reg_get "$x" NAME)|$(reg_get "$x" PROVIDER) · $(gateway_clients_of "$x" | wc -l) containers · $(reg_get "$x" BRIDGE) · $(reg_get "$x" LAN_ADDR)"); done
+        gi+=("new|New gateway|another VPN connection with its own name and bridge")
+        pick g "Which gateway?" "${V[pick_gw]:-new}" "${gi[@]}" || return
+        [ "$g" = new ] && g=""
+        V[pick_gw]=${g:-new}
+    fi
+    for x in name ct bridge net lanaddr; do unset "V[gw.$x]"; done
     if [ -n "$g" ]; then
-        V[gw.mode]=reconfig; V[gw.ct]=$g; V[gw.name]=$(ct_name "$g")
+        V[gw.mode]=reconfig; V[gw.ct]=$g; V[gw.name]=$(reg_get "$g" NAME); V[gw.name]=${V[gw.name]:-$(ct_name "$g")}
         V[gw.bridge]=$(reg_get "$g" BRIDGE); V[gw.net]=$(reg_get "$g" VPN_NET); V[gw.lanaddr]=$(reg_get "$g" LAN_ADDR)
-        page "VPN gateway" "Your gateway is CT $g (${V[gw.name]}). You can change its VPN, which containers sit behind it, and what's published to your home network."
+        page "Gateway ${V[gw.name]}" "CT $g. You can change its VPN, which containers sit behind it, and what's published to your home network."
     else
         V[gw.mode]=create
-        page "VPN gateway" "A small container becomes your VPN router. Every container you plug into its private bridge goes through the VPN, with the kill switch outside the apps, so nothing inside them can route around it."
+        page "New VPN gateway" "A small container becomes a VPN router. Every container you plug into its private bridge goes through the VPN, with the kill switch outside the apps, so nothing inside them can route around it."
     fi
     [ -z "${V[lan_net]:-}" ] && V[lan_net]=$(ip -4 route show dev "$(ip -4 route show default | awk '{print $5; exit}')" scope link 2>/dev/null | awk '{print $1; exit}')
     gw_diagram
@@ -2519,6 +2634,15 @@ gw_intro() {
         "custom|Custom|choose the bridge, network, ports and storage yourself" || return
     V[mode]=$mode
     echo
+    if [ "${V[gw.mode]}" = reconfig ]; then
+        local newname
+        field newname "Name of this gateway" "${V[gw.name]}" v_gwname || return
+        V[gw.newname]=$newname
+    else
+        local newname
+        field newname "Name for the new gateway (this is also its hostname)" "${V[gw.name]:-$(suggest_gw_name)}" v_gwname || return
+        V[gw.name]=$newname
+    fi
     if [ "${V[gw.mode]}" = reconfig ]; then
         if [ "$(ct_status "$g")" != running ]; then run_task "starting CT $g" pct start "$g" || { pause; return 1; }; sleep 3; fi
         detect_task "looking inside the gateway" gw "$g" || { bad "could not read the gateway's setup"; pause; return 1; }
@@ -2540,8 +2664,7 @@ gw_intro() {
 gw_bridge() {
     [ "${V[gw.mode]}" = reconfig ] && return 3
     if is_express; then
-        local xbr=${V[gw.bridge]:-$(free_bridge)} xnet=${V[gw.net]:-10.10.10.0/24}
-        [ "$(net_prefix "$xnet")" = "$(net_prefix "${V[lan_net]}")" ] && xnet=10.77.77.0/24
+        local xbr=${V[gw.bridge]:-$(free_bridge)} xnet=${V[gw.net]:-$(free_vpnnet)}
         V[gw.bridge]=$xbr; V[gw.net]=$xnet; V[gw.ip]="$(net_prefix "$xnet").1"
         return 3
     fi
@@ -2549,7 +2672,7 @@ gw_bridge() {
     page "Private bridge" "A new Proxmox bridge with no physical port. Containers on it can only reach the internet through the gateway's tunnel."
     local br net
     field br "Bridge name" "${V[gw.bridge]:-$(free_bridge)}" v_newbridge || return
-    field net "VPN network" "${V[gw.net]:-10.10.10.0/24}" v_vpnnet || return
+    field net "VPN network" "${V[gw.net]:-$(free_vpnnet)}" v_vpnnet || return
     V[gw.bridge]=$br; V[gw.net]=$net; V[gw.ip]="$(net_prefix "$net").1"
     echo
     note "the gateway gets ${V[gw.ip]}, containers get .10 and up, DHCP hands out .100–.199"
@@ -2564,13 +2687,13 @@ gw_container() {
     page "Gateway container" "A tiny Debian container (256 MB RAM, 2 GB disk) that runs the tunnel. It needs a fixed address on your home network: that's where you'll open qBittorrent, Prowlarr and so on."
     local id name lan store
     if is_express; then
-        id=${V[gw.ct]:-$(pvesh get /cluster/nextid 2>/dev/null)}; name=${V[gw.name]:-vpn-gateway}
+        id=${V[gw.ct]:-$(pvesh get /cluster/nextid 2>/dev/null)}; name=${V[gw.name]:-$(suggest_gw_name)}
         if ! { [[ $id =~ ^[0-9]{3,9}$ ]] && ! ct_exists "$id"; }; then bad "container ID $id is not free"; pause; return 1; fi
         note "found a free address on ${V[lan_net]}; reserve it in your router's DHCP if you can"
         field lan "LAN address for the gateway (or dhcp)" "${V[gw.lanaddr]:-$(suggest_gw_ip)}" v_gwlan || return
     else
         field id "Container ID" "${V[gw.ct]:-$(pvesh get /cluster/nextid 2>/dev/null)}" v_newct || return
-        field name "Hostname" "${V[gw.name]:-vpn-gateway}" v_host || return
+        name=${V[gw.name]:-$(suggest_gw_name)}
         note "pick a free address on ${V[lan_net]}; reserve it in your router's DHCP if you can"
         field lan "LAN address for the gateway (or dhcp)" "${V[gw.lanaddr]:-$(suggest_gw_ip)}" v_gwlan || return
     fi
@@ -2602,7 +2725,8 @@ gw_clients() {
         name=$(ct_name "$id")
         on=0; case " ${V[gw.clients]:-} " in *" $id "*) on=1 ;; esac
         case $role in
-            client) desc="behind the gateway · $(reg_get "$id" IP)" ;;
+            client) [ "$(reg_get "$id" GATEWAY)" = "${V[gw.ct]}" ] || continue
+                    desc="behind this gateway · $(reg_get "$id" IP)" ;;
             tunnel) desc="has its own VPN now → gets converted" ;;
             gateway) continue ;;
             *) desc=$(ct_status "$id") ;;
@@ -2874,10 +2998,11 @@ stage_common() {   # stage_common TARGET DIR
              vpnguard-natpmp.service vpnguard-openvpn.service nftables.conf dropin-nftables.conf dhclient-vpnguard; do
         cp "$STAGE/payload/$f" "$d/$f"
     done
-    render_slots "$t" "$d" || return 1
+    [ "${FW_ONLY:-0}" = 1 ] || render_slots "$t" "$d" || return 1
     {
         echo "RETIRE_LEGACY=$([ "${D[$t.LEGACY_RULES]:-0}${D[$t.LEGACY6_RULES]:-0}" != 00 ] && echo 1 || echo 0)"
         echo "QBIT_SYNC=${V[$t.qbit_sync]:-0}"
+        echo "FW_ONLY=${FW_ONLY:-0}"
         echo "KEEP_QBIT_CRED=${V[$t.qbit_keep]:-0}"
     } > "$d/apply.env"
     if [ "${V[$t.qbit_sync]:-0}" = 1 ] && [ "${V[$t.qbit_keep]:-0}" != 1 ]; then
@@ -3158,6 +3283,7 @@ tunnel_apply() {
             local pushed; pushed=$(trim "${RESULTS[DNS]:-}")
             [ -z "${V[$t.primary.dns]:-}" ] && [ -n "$pushed" ] && pct set "$ct" --nameserver "$pushed" >/dev/null 2>&1
             reg_set "$ct" ROLE tunnel; reg_set "$ct" NAME "${V[$t.name]}"
+            reg_set "$ct" FPS "$(echo ${V[$t.primary.fp]:-} ${V[$t.backup.fp]:-})"
             reg_set "$ct" PROVIDER "${V[$t.provider]}"; reg_set "$ct" PROTO "${V[$t.primary.kind]}"
         else
             RES[$t]=fail
@@ -3348,7 +3474,14 @@ gateway_apply() {
         bad "the gateway didn't come up, so no containers were moved"
         pause; return 1
     fi
+    if [ -n "${V[gw.newname]:-}" ] && [ "${V[gw.newname]}" != "${V[gw.name]}" ]; then
+        pct set "$g" --hostname "${V[gw.newname]}" >/dev/null 2>&1
+        cexec "$g" sh -c "echo '${V[gw.newname]}' > /etc/hostname; hostname '${V[gw.newname]}'" >/dev/null 2>&1
+        ok "renamed ${V[gw.name]} → ${V[gw.newname]}"
+        V[gw.name]=${V[gw.newname]}
+    fi
     reg_set "$g" ROLE gateway; reg_set "$g" NAME "${V[gw.name]}"; reg_set "$g" PROVIDER "${V[gw.provider]}"
+    reg_set "$g" FPS "$(echo ${V[gw.primary.fp]:-} ${V[gw.backup.fp]:-})"
     reg_set "$g" PROTO "${V[gw.primary.kind]}"; reg_set "$g" BRIDGE "${V[gw.bridge]}"; reg_set "$g" VPN_NET "${V[gw.net]}"
     [ "${V[gw.mode]}" = create ] && reg_set "$g" LAN_ADDR "${V[gw.lanaddr]}"
 
@@ -3476,7 +3609,7 @@ dashboard() {   # dashboard [cached] : "cached" draws what probe_all already col
     ids=$(reg_ids)
     if [ -z "$ids" ]; then
         box_top "Your containers"
-        box_row "${GR}Nothing is protected yet. Choose ${R}${B}Protect containers${R}${GR} or ${R}${B}VPN gateway${R}${GR}: Express takes about a minute.${R}"
+        box_row "${GR}Nothing is protected yet. Choose ${R}${B}Protect containers${R}${GR} or ${R}${B}VPN gateways${R}${GR}: Express takes about a minute.${R}"
         box_bot
         return
     fi
@@ -3527,6 +3660,151 @@ live_screen() {
     done
 }
 
+# ════════════════════════════════════════════════════════════
+#  Port forwarding menu (per gateway). Two kinds:
+#    · from the internet, through the VPN, to one container (NAT-PMP or a fixed port)
+#    · from your home network, through the gateway's address, to a container's ports
+#  Changes only reload the gateway's firewall; the tunnel is never restarted.
+# ════════════════════════════════════════════════════════════
+
+# pf_load_gateway GWID : fill V from the registry and the gateway's own settings file
+pf_load_gateway() {
+    local g=$1 envf="$STAGE/gw-$g.env" c
+    local -A GE=()
+    pct pull "$g" /etc/vpnguard/vpnguard.env "$envf" >/dev/null 2>&1 || return 1
+    read_kv_into GE "" < "$envf"
+    V[gw.mode]=reconfig; V[gw.ct]=$g; V[gw.name]=$(reg_get "$g" NAME); V[gw.name]=${V[gw.name]:-$(ct_name "$g")}
+    V[gw.provider]=${GE[PROVIDER]:-other}; V[gw.bridge]=$(reg_get "$g" BRIDGE); V[gw.net]=${GE[VPN_NET]}; V[gw.ip]=${GE[GW_IP]}
+    V[gw.lanaddr]=$(reg_get "$g" LAN_ADDR); V[lan_net]=${GE[LAN_NET]}; V[gw.lan_mode]=${GE[LAN_MODE]:-open}; V[gw.lan_out]=${GE[LAN_OUT]}
+    V[gw.primary.kind]=${GE[PROTO]:-wireguard}; V[gw.primary.endpoints]=${GE[ENDPOINTS]}; V[gw.primary.dns]=${GE[DNS_PRIMARY]}
+    V[gw.pf_mode]=${GE[PF_MODE]:-none}; V[gw.pf_port]=${GE[PF_PORT]}; V[gw.pf_gw]=${GE[PF_GATEWAY]}; V[gw.qbit_url]=${GE[QBIT_URL]}
+    V[home_ip]=${GE[HOME_IP]}
+    V[gw.clients]=""; V[gw.pf_target]=""
+    for c in $(gateway_clients_of "$g"); do
+        V[gw.clients]="${V[gw.clients]} $c"
+        V[c$c.name]=$(reg_get "$c" NAME); V[c$c.ip]=$(reg_get "$c" IP); V[c$c.publish]=$(reg_get "$c" PUBLISH)
+        [ -n "${GE[PF_TARGET]}" ] && [ "${V[c$c.ip]}" = "${GE[PF_TARGET]}" ] && V[gw.pf_target]=$c
+    done
+    V[gw.clients]=${V[gw.clients]# }
+    # a stored qBittorrent login stays in place unless the forwarded port setup is redone
+    if cexec "$g" test -f /etc/vpnguard/qbit.env 2>/dev/null; then V[gw.qbit_sync]=1; V[gw.qbit_keep]=1; fi
+    return 0
+}
+
+pf_tables() {
+    local gwaddr=${V[gw.lanaddr]%/*} c e pf port rows=0
+    [ "$gwaddr" = dhcp ] && gwaddr="the gateway"
+    case ${V[gw.pf_mode]:-none} in
+        none)   pf="off" ;;
+        natpmp) port=$(cexec "${V[gw.ct]}" cat /run/vpnguard-pf-port 2>/dev/null)
+                pf="NAT-PMP · port ${port:-pending} → CT ${V[gw.pf_target]:-?} ${V[c${V[gw.pf_target]:-0}.name]:-}" ;;
+        static) pf="fixed port ${V[gw.pf_port]} → CT ${V[gw.pf_target]:-?} ${V[c${V[gw.pf_target]:-0}.name]:-}" ;;
+    esac
+    box_top "From the internet, through the VPN"
+    box_row "$pf"
+    box_bot
+    box_top "From your home network, through ${gwaddr}"
+    for c in ${V[gw.clients]}; do
+        for e in ${V[c$c.publish]}; do
+            box_row "${CY}${gwaddr}:${e%%:*}${R}  →  ${V[c$c.name]} (CT $c) port ${e#*:}"; rows=1
+        done
+    done
+    [ "$rows" = 0 ] && box_row "${GR}nothing published${R}"
+    box_bot
+}
+
+# edit one container's published ports
+pf_edit_published() {
+    local -a items=(); local c pick_c pub e ok_all other taken
+    for c in ${V[gw.clients]}; do items+=("$c|CT $c ${V[c$c.name]}|${V[c$c.publish]:-nothing published}"); done
+    [ ${#items[@]} -gt 0 ] || { warn "no containers behind this gateway yet"; pause; return 0; }
+    echo
+    pick pick_c "Which container?" "" "${items[@]}" || return 0
+    if [ -z "${D[c$pick_c.LISTEN_TCP]+x}" ]; then
+        V[c$pick_c.name]=${V[c$pick_c.name]:-$(ct_name "$pick_c")}
+        detect_task "looking at CT $pick_c ${V[c$pick_c.name]}" "c$pick_c" "$pick_c" || warn "could not look inside, you can still type ports by hand"
+    fi
+    [ -n "${D[c$pick_c.LISTEN_TCP]:-}" ] && note "CT $pick_c listens on: tcp ${D[c$pick_c.LISTEN_TCP]}"
+    note "type ports like: 8090 9696, or outside:inside like 2222:22 (- for none)"
+    while true; do
+        field pub "Ports to publish for ${V[c$pick_c.name]}" "${V[c$pick_c.publish]}" v_publish || return 0
+        ok_all=1; taken=" 53 67 "
+        for other in ${V[gw.clients]}; do
+            [ "$other" = "$pick_c" ] && continue
+            for e in ${V[c$other.publish]}; do taken="$taken${e%%:*} "; done
+        done
+        for e in $pub; do
+            case "$taken" in *" ${e%%:*} "*) bad "outside port ${e%%:*} is already used by another container (try $((${e%%:*} + 10000)):${e#*:})"; ok_all=0 ;; esac
+        done
+        [ "$ok_all" = 1 ] && break
+    done
+    V[c$pick_c.publish]=$pub
+    PF_CHANGED=1
+}
+
+# change the port the VPN forwards (mode, target container, qBittorrent sync)
+pf_edit_vpn() {
+    local c
+    [ -n "${V[gw.clients]}" ] || { warn "no containers behind this gateway yet"; pause; return 0; }
+    for c in ${V[gw.clients]}; do
+        [ -n "${D[c$c.LISTEN_TCP]+x}" ] && continue
+        V[c$c.name]=${V[c$c.name]:-$(ct_name "$c")}
+        detect_task "looking at CT $c ${V[c$c.name]}" "c$c" "$c" || true
+    done
+    V[gw.qbit_sync]=0; V[gw.qbit_keep]=0
+    local rc
+    pg_pf gw; rc=$?
+    case $rc in 0) PF_CHANGED=1 ;; 2) return 2 ;; esac
+    return 0
+}
+
+pf_apply() {
+    local g=${V[gw.ct]} rc c
+    FLOW="port forwarding"; PAGE_TOTAL=0; CONTEXT=""
+    page "Applying" "Only the gateway's firewall and port forwarding are reloaded. The VPN stays connected."
+    FW_ONLY=1
+    run_task "preparing the firewall" stage_gateway "$STAGE/outgw" || { FW_ONLY=0; pause; return 1; }
+    run_task "copying files in" push_dir "$g" "$STAGE/outgw" || { FW_ONLY=0; pause; return 1; }
+    FW_ONLY=0
+    apply_in_ct "$g"; rc=$?
+    if [ "$rc" != 0 ]; then bad "the gateway did not take the change (the previous firewall is still in place if it failed its check)"; pause; return 1; fi
+    for c in ${V[gw.clients]}; do reg_set "$c" PUBLISH "${V[c$c.publish]}"; done
+    PF_CHANGED=0
+    echo
+    pf_tables
+    pause
+}
+
+port_screen() {
+    local g a name
+    new_stage; write_payload "$STAGE/payload"
+    FLOW="port forwarding"; PAGE_TOTAL=0; CONTEXT=""
+    PF_CHANGED=0
+    page "Port forwarding" "Choose a gateway, then change what is reachable from the internet (through the VPN) and from your home network."
+    pick_managed g "gateway" "Which gateway?" || return 0
+    V=(); D=()
+    pf_load_gateway "$g" || { bad "could not read the gateway's settings (is CT $g running?)"; pause; return 0; }
+    name=${V[gw.name]}
+    while true; do
+        FLOW="port forwarding"; PAGE_TOTAL=0; CONTEXT=""
+        page "Port forwarding · $name" "Nothing changes until you choose Apply."
+        pf_tables
+        [ "$PF_CHANGED" = 1 ] && printf '\n    %s▲ unsaved changes%s\n' "$WA" "$R"
+        echo
+        pick a "What now?" "$([ "$PF_CHANGED" = 1 ] && echo apply || echo back)" \
+            "ports|Published ports|choose which of a container's ports your home network can reach" \
+            "vpn|Port from the VPN|the port your provider forwards, and which container gets it" \
+            "apply|Apply changes|reload the gateway's firewall (the VPN stays connected)" \
+            "back|Back|$([ "$PF_CHANGED" = 1 ] && echo "discard unsaved changes")" || return 0
+        case $a in
+            ports) pf_edit_published ;;
+            vpn)   pf_edit_vpn; [ $? = 2 ] && return 0 ;;
+            apply) [ "$PF_CHANGED" = 1 ] || { note "nothing to apply"; nap 0.8; continue; }
+                   pf_apply && { pf_load_gateway "$g"; } ;;
+            back)  return 0 ;;
+        esac
+    done
+}
 # ════════════════════════════════════════════════════════════
 #  Smaller screens
 # ════════════════════════════════════════════════════════════
@@ -3848,7 +4126,8 @@ main_menu() {
         echo
         pick m "What now?" "${LAST_CHOICE:-tunnel}" \
             "tunnel|Protect containers|each one gets its own VPN" \
-            "gateway|VPN gateway|one VPN for many containers, on a private bridge" \
+            "gateway|VPN gateways|named gateways: one VPN for many containers, on a private bridge" \
+            "ports|Port forwarding|what the VPN forwards in, and what your home network can reach" \
             "live|Live dashboard|auto-refreshing view of everything" \
             "status|Check a container|full leak and kill-switch test" \
             "switch|Switch config|move a tunnel to its backup (or back)" \
@@ -3863,6 +4142,7 @@ main_menu() {
             tunnel)   V=(); D=(); tunnel_wizard ;;
             gateway)  V=(); D=(); gateway_wizard ;;
             status)   status_screen ;;
+            ports)    port_screen ;;
             live)     live_screen ;;
             switch)   switch_screen ;;
             settings) settings_screen ;;

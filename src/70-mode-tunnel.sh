@@ -125,8 +125,15 @@ tm_apps() {
         done
         [ "$ok_all" = 1 ] && break
     done
-    V[$t.apps]=${out# }
-    if [[ ${V[$t.apps]} == *qbittorrent* ]] && [ -n "${D[$t.QBIT_IFACE]:-}" ]; then
+    V[$t.apps_all]=${out# }
+    if [ -n "${V[$t.apps_all]}" ]; then
+        echo
+        local tie
+        yn tie "Stop them while the VPN is down, and start them again when it's back? (recommended)" "${V[$t.tie]:-y}" || return
+        V[$t.tie]=$tie
+    fi
+    if [ "${V[$t.tie]:-y}" = y ]; then V[$t.apps]=${V[$t.apps_all]}; else V[$t.apps]=""; fi
+    if [[ ${V[$t.apps_all]} == *qbittorrent* ]] && [ -n "${D[$t.QBIT_IFACE]:-}" ]; then
         local want=wg0; [ "${V[$t.primary.kind]}" = openvpn ] && want=tun0
         [ "${D[$t.QBIT_IFACE]}" != "$want" ] && warn "qBittorrent is bound to ${D[$t.QBIT_IFACE]}; set Options → Advanced → Network interface to $want"
     fi
@@ -150,7 +157,9 @@ tm_card() {
         box_row "${GR}From home${R}      ${V[lan_net]} → tcp ${V[$t.lan_tcp]:-none}"
         box_row "${GR}LAN out${R}        ${V[$t.lan_out]:-none}"
     fi
-    box_row "${GR}Tied to VPN${R}    ${V[$t.apps]:-nothing}"
+    if [ -n "${V[$t.apps]:-}" ]; then box_row "${GR}Tied to VPN${R}    ${V[$t.apps]} ${GR}· stop when the VPN drops${R}"
+    elif [ -n "${V[$t.apps_all]:-}" ]; then box_row "${GR}Apps${R}            ${V[$t.apps_all]} ${GR}· keep running when the VPN drops${R}"
+    else box_row "${GR}Tied to VPN${R}    nothing"; fi
     box_row "${GR}Port forward${R}   $pf"
     box_row "${GR}Internet${R}       only through the VPN · IPv6 blocked"
     if [[ ${V[$t.apps]:-} == *qbittorrent* ]] && [ -n "${D[$t.QBIT_IFACE]:-}" ]; then
@@ -164,19 +173,22 @@ tm_card() {
 
 tm_review() {
     FLOW="per-container setup"; CONTEXT=""
+    local i tie ask=0
+    if is_express; then
+        for ((i = 1; i <= NT; i++)); do express_fill "$i"; [ -n "${V[$i.apps_all]:-}" ] && ask=1; done
+    fi
+    if [ "$ask" = 1 ]; then
+        page "Apps" "Apps like qBittorrent can be stopped automatically whenever the VPN is down, and started again when it's back. They can't reach the internet while it's down either way; this just stops them retrying."
+        for ((i = 1; i <= NT; i++)); do
+            [ -n "${V[$i.apps_all]:-}" ] || continue
+            yn tie "CT ${V[$i.ct]} ${V[$i.name]}: stop ${V[$i.apps_all]//.service/} while the VPN is down?" "${V[$i.tie]:-y}" || return
+            V[$i.tie]=$tie
+            express_fill "$i"
+        done
+    fi
     page "Review" "Nothing has changed yet. This is what will happen:"
-    local i
     for ((i = 1; i <= NT; i++)); do tm_card "$i"; done
     echo
-    # two containers on one WireGuard key knock each other off the server
-    local -A seen=(); local k
-    for ((i = 1; i <= NT; i++)); do
-        [ "${V[$i.primary.kind]:-}" = wireguard ] || continue
-        k=$(key_fp "${V[$i.primary.file]}"); [ -n "$k" ] || continue
-        if [ -n "${seen[$k]:-}" ]; then
-            warn "CT ${V[$i.ct]} and CT ${seen[$k]} use the same WireGuard key. Most VPNs allow one connection per key, so only one of them will work: give each its own config."
-        else seen[$k]=${V[$i.ct]}; fi
-    done
     local snap go
     yn snap "Take a Proxmox snapshot of each first, so you can roll back?" "${V[snap]:-y}" || return
     V[snap]=$snap

@@ -240,6 +240,42 @@ key_fp() {   # key_fp FILE : short fingerprint of a WireGuard PrivateKey (never 
     awk 'tolower($1) == "privatekey" {sub(/^[^=]*=[ \t]*/, ""); print; exit}' "$1" 2>/dev/null | sha256sum | cut -c1-16
 }
 
+# One connection per config: a WireGuard key can hold a single session, and "different container, different
+# connection" is the point of per-container tunnels. A config's identity is its key (WireGuard) or its
+# server list (OpenVPN). Setups remember theirs in the registry (FPS) so a later session can refuse a repeat.
+cfg_fp_of() {   # cfg_fp_of TARGET SLOT : identity of the config that was just analysed
+    local t=$1 s=$2
+    if [ "${V[$t.$s.kind]}" = wireguard ]; then key_fp "${V[$t.$s.file]}"
+    else printf '%s' "${V[$t.$s.endpoints]}" | tr ' ' '\n' | sort | sha256sum | cut -c1-16; fi
+}
+lib_fp() {   # lib_fp NAME : same identity for a saved config
+    if [ "$(lib_meta "$1" KIND)" = wireguard ]; then key_fp "$LIB/$1.conf"
+    else lib_meta "$1" ENDPOINTS | tr ' ' '\n' | sort | sha256sum | cut -c1-16; fi
+}
+fp_owner() {   # fp_owner FP [EXCEPT_ID] : prints "ID NAME" of the setup that already uses it
+    local fp=$1 ex=${2:-} id
+    [ -n "$fp" ] || return 1
+    for id in $(reg_ids); do
+        [ "$id" = "$ex" ] && continue
+        case " $(reg_get "$id" FPS) " in *" $fp "*) echo "$id $(reg_get "$id" NAME)"; return 0 ;; esac
+    done
+    return 1
+}
+fp_conflict() {   # fp_conflict TARGET SLOT FP EXCEPT_ID : prints who has it, returns 0 if somebody does
+    local t=$1 s=$2 fp=$3 ex=$4 o other i
+    [ -n "$fp" ] || return 1
+    if o=$(fp_owner "$fp" "$ex"); then echo "CT ${o%% *} ${o#* }"; return 0; fi
+    [ "$s" = primary ] && other=backup || other=primary
+    if [ "${V[$t.$other.fp]:-}" = "$fp" ]; then echo "the $other config of this same setup"; return 0; fi
+    for ((i = 1; i <= NT; i++)); do
+        [ "$t" = "$i" ] && continue
+        if [ "${V[$i.primary.fp]:-}" = "$fp" ] || [ "${V[$i.backup.fp]:-}" = "$fp" ]; then
+            echo "CT ${V[$i.ct]} ${V[$i.name]} (in this same setup)"; return 0
+        fi
+    done
+    return 1
+}
+
 guess_provider() {   # guess_provider TARGET SLOT : look at the tunnel addresses
     local d=" ${V[$1.$2.dns]} ${V[$1.$2.addr]} ${V[$1.$2.endpoints]} "
     if   [[ $d =~ \ 10\.2\.0\. ]]; then echo proton

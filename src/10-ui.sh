@@ -387,11 +387,19 @@ list_move() {   # list_move DELTA  (uses cur top vis n of the caller)
 # typing digits jumps to that number
 list_digits() {   # list_digits CHAR : returns 0 if it moved the highlight
     [[ $1 =~ ^[0-9]$ ]] || return 1
-    local t="${numbuf}$1"
-    if [ "$t" -ge 1 ] && [ "$t" -le "$n" ]; then numbuf=$t
-    elif [ "$1" -ge 1 ] && [ "$1" -le "$n" ]; then numbuf=$1
-    else return 0; fi
-    cur=$((numbuf - 1))
+    local t="${numbuf}$1" j prefix=0
+    for ((j = 0; j < n; j++)); do
+        local key=${ids[j]:-${keys[j]:-}}
+        # a typed container ID (or any item key) wins over a list position
+        if [ "$key" = "$t" ]; then numbuf=$t; cur=$j; prefix=2; break; fi
+        [[ $key == "$t"* ]] && prefix=1
+    done
+    if [ "$prefix" = 1 ]; then numbuf=$t; return 0; fi            # still typing an ID: wait for the next digit
+    if [ "$prefix" = 0 ]; then
+        if [ "$t" -ge 1 ] && [ "$t" -le "$n" ]; then numbuf=$t; cur=$((t - 1))
+        elif [ "$1" -ge 1 ] && [ "$1" -le "$n" ]; then numbuf=$1; cur=$(($1 - 1))
+        else numbuf=""; return 0; fi
+    fi
     [ "$cur" -lt "$top" ] && top=$cur
     [ "$cur" -ge $((top + vis)) ] && top=$((cur - vis + 1))
     return 0
