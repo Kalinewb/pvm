@@ -23,7 +23,7 @@ set -o pipefail
 umask 077
 export LC_ALL=C.UTF-8
 
-VERSION="2.2"
+VERSION="2.3"
 REPO_RAW=${VPNLXC_RAW:-https://raw.githubusercontent.com/Kalinewb/vpn-lxc}
 SELF=$(readlink -f "$0" 2>/dev/null || echo "$0")
 ETC=${VPNLXC_ETC:-/etc/vpn-lxc}
@@ -54,9 +54,18 @@ else
     ANIM=0
 fi
 
-COLS=$(tput cols 2>/dev/null || echo 80)
-[[ $COLS =~ ^[0-9]+$ ]] || COLS=80
-W=$((COLS - 4)); [ "$W" -gt 78 ] && W=78; [ "$W" -lt 50 ] && W=50
+# The layout follows the terminal: re-read the size whenever a screen is drawn, so a resize shows on the next screen.
+fit() {
+    COLS=$(tput cols 2>/dev/null || echo 80)
+    [[ $COLS =~ ^[0-9]+$ ]] || COLS=80
+    W=$((COLS - 4)); [ "$W" -gt 160 ] && W=160; [ "$W" -lt 50 ] && W=50
+}
+fit
+
+# full-screen mode: the app draws on the terminal's alternate screen and leaves your scrollback as it was
+ALT=0
+screen_enter() { if [ "$INTERACTIVE" = 1 ] && [ "$ALT" = 0 ]; then printf '\e[?1049h\e[H\e[2J'; ALT=1; fi; return 0; }
+screen_leave() { if [ "$ALT" = 1 ]; then printf '\e[?1049l'; ALT=0; fi; return 0; }
 
 GRAD256=(51 45 39 33 63 99 135 171 207)
 
@@ -168,7 +177,7 @@ pbar() {   # pbar <done> <total> <width>
 }
 
 page() {   # page "Title" ["subtitle"]
-    cls
+    fit; cls
     local head right n
     head="$(grad '◆ VPN·LXC')  ${GR}v$VERSION$R"
     right="$GR$FLOW$R"
@@ -452,11 +461,13 @@ pick() {
         IFS='|' read -r k l d <<<"$it"
         keys+=("$k"); labels+=("$l"); descs+=("$d")
     done
-    local n=${#keys[@]} cur=0 top=0 numbuf="" vis drawn
+    local n=${#keys[@]} cur=0 top=0 numbuf="" vis drawn gap=0 rows
+    rows=$(tput lines 2>/dev/null || echo 24); [[ $rows =~ ^[0-9]+$ ]] || rows=24
+    [ "$rows" -ge 36 ] && [ "$n" -le 10 ] && gap=1          # a tall terminal: a blank line between choices
     for ((i = 0; i < n; i++)); do [ "${keys[i]}" = "$__def" ] && cur=$i; done
-    vis=$(list_rows); [ "$vis" -gt "$n" ] && vis=$n
+    vis=$(( $(list_rows) / (1 + gap) )); [ "$vis" -lt 3 ] && vis=3; [ "$vis" -gt "$n" ] && vis=$n
     [ "$cur" -ge "$vis" ] && top=$((cur - vis + 1))
-    drawn=$((vis + 2))
+    drawn=$((vis * (1 + gap) + 2))
     printf '    %s›%s %s  %s↑↓ move · ⏎ choose · b back · q quit%s\n' "$CY" "$R" "$__q" "$GR" "$R"
     cur_hide
     local first=1
@@ -469,6 +480,7 @@ pick() {
             else
                 printf '    %s%s%s%s %s%s%s\n' "$CY" "$(num $((i + 1)))" "$R" "$(padr "${labels[i]}" 22)" "$DG" "${descs[i]}" "$R"
             fi
+            [ "$gap" = 1 ] && printf '\n'
         done
         if [ "$n" -gt "$vis" ]; then printf '    %s%s of %s%s\n' "$DG" "$((cur + 1))" "$n" "$R"; else printf '\n'; fi
         read_key
@@ -765,7 +777,7 @@ read_kv_into() {   # read_kv_into ARRAY prefix
 #  Host plumbing: pct, registry, settings, notifications
 # ════════════════════════════════════════════════════════════
 STAGE=""
-cleanup() { cur_show; rm -f "$CT_CACHE" "$CT_CACHE.tmp"; [ -n "$STAGE" ] && rm -rf "$STAGE"; return 0; }
+cleanup() { screen_leave; cur_show; rm -f "$CT_CACHE" "$CT_CACHE.tmp"; [ -n "$STAGE" ] && rm -rf "$STAGE"; return 0; }
 trap cleanup EXIT
 trap 'exit 130' INT TERM HUP   # closing the terminal must still clean the temp dir (it can hold configs)
 new_stage() { [ -n "$STAGE" ] && return 0; STAGE=$(mktemp -d /tmp/vpn-lxc.XXXXXX) || die "could not create a temp dir"; }
@@ -3573,20 +3585,23 @@ probe_all() {   # probe_all DIR : brief status of every managed container, in pa
 
 ago() { local s=$1; if [ "$s" -lt 0 ]; then echo "—"; elif [ "$s" -lt 120 ]; then echo "${s}s"; else echo "$((s / 60))m"; fi; }
 
+hb() { awk -v b="${1:-0}" 'BEGIN { split("B KiB MiB GiB TiB", u); i = 1; while (b >= 1024 && i < 5) { b /= 1024; i++ } printf "%.1f%s", b, u[i] }'; }
+
 dash_row() {   # dash_row ID [indent]
-    local id=$1 d="$STAGE/dash" name role st dot line
+    local id=$1 d="$STAGE/dash" name role st dot line nw=12 more=""
+    [ "$W" -ge 100 ] && nw=18; [ "$W" -ge 130 ] && nw=24
     name=$(reg_get "$id" NAME); role=$(reg_get "$id" ROLE); st=$(ct_status "$id")
     local -A BR=()
     [ -f "$d/$id" ] && read_kv_into BR "" < "$d/$id"
     if [ "$st" != running ]; then
         DASH_OFF=$((DASH_OFF + 1))
-        dot="$DG○$R"; line=$(printf '%s %-4s %-12.12s %s%-7s%s %s%s%s' "$dot" "$id" "$name" "$GR" "$role" "$R" "$DG" "$st" "$R")
+        dot="$DG○$R"; line=$(printf '%s %-4s %-*.*s %s%-7s%s %s%s%s' "$dot" "$id" "$nw" "$nw" "$name" "$GR" "$role" "$R" "$DG" "$st" "$R")
     elif [ "$role" = client ]; then
         local ip gwexit
         ip=$(cat "$d/$id.ip" 2>/dev/null)
         gwexit=$(kvfile_get "$d/$(reg_get "$id" GATEWAY)" EXIT_IP)
         if [ -n "$ip" ] && [ "$ip" = "$gwexit" ]; then dot="$OK●$R"; DASH_OK=$((DASH_OK + 1)); else dot="$WA●$R"; DASH_BAD=$((DASH_BAD + 1)); fi
-        line=$(printf '  %s└%s %s %-4s %-11.11s %s%-13s%s %s' "$DG" "$R" "$dot" "$id" "$name" "$GR" "$(reg_get "$id" IP)" "$R" \
+        line=$(printf '  %s└%s %s %-4s %-*.*s %s%-13s%s %s' "$DG" "$R" "$dot" "$id" "$((nw - 1))" "$((nw - 1))" "$name" "$GR" "$(reg_get "$id" IP)" "$R" \
             "$([ -n "$ip" ] && [ "$ip" = "$gwexit" ] && echo "${OK}via gateway${R}" || echo "${WA}${ip:-no answer}${R}")")
     else
         local prov proto exit extra=""
@@ -3598,7 +3613,11 @@ dash_row() {   # dash_row ID [indent]
         [ -n "${BR[PF_PORT]:-}" ] && extra="$extra ${CY}⇅${BR[PF_PORT]}${R}"
         [ "${BR[ACTIVE]:-}" = backup ] && extra="$extra ${WA}⟲backup${R}"
         [ "${BR[PROTO]:-}" = wireguard ] && [ "${BR[HS_AGE]:--1}" -ge 0 ] && extra="$extra ${DG}$(ago "${BR[HS_AGE]}")${R}"
-        line=$(printf '%s %-4s %-12.12s %s%-7s%s %s %s%s' "$dot" "$id" "$name" "$GR" "$role" "$R" "$(padr "${prov%% *} · $proto" 14)" "$exit" "$extra")
+        if [ "$W" -ge 100 ]; then
+            [ "$role" = gateway ] && more="  ${DG}$(reg_get "$id" BRIDGE) · $(reg_get "$id" LAN_ADDR)${R}"
+            [ "$W" -ge 130 ] && [ -n "${BR[RX]:-}" ] && more="$more  ${DG}▼$(hb "${BR[RX]}") ▲$(hb "${BR[TX]:-0}")${R}"
+        fi
+        line=$(printf '%s %-4s %-*.*s %s%-7s%s %s %s%s%s' "$dot" "$id" "$nw" "$nw" "$name" "$GR" "$role" "$R" "$(padr "${prov%% *} · $proto" 14)" "$exit" "$extra" "$more")
     fi
     box_row "$line"
 }
@@ -3634,7 +3653,7 @@ dashboard() {   # dashboard [cached] : "cached" draws what probe_all already col
     local wd="${ER}off${R}"
     systemctl is-active --quiet vpn-lxc-watchdog.timer 2>/dev/null && wd="${OK}on${R}"
     local nk; nk=$(set_get NOTIFY_KIND); nk=${nk:-none}
-    box_row "${DG}$(rep ─ $((W - 5)))${R}"
+    box_row "${DG}$(rep ─ $((W - 4)))${R}"
     local sum="${OK}✔ $DASH_OK protected${R}"
     [ "$DASH_BAD" -gt 0 ] && sum="$sum   ${WA}▲ $DASH_BAD need attention${R}"
     [ "$DASH_OFF" -gt 0 ] && sum="$sum   ${DG}○ $DASH_OFF stopped${R}"
@@ -4116,9 +4135,10 @@ watchdog_round() {
 # ════════════════════════════════════════════════════════════
 main_menu() {
     local m rc
+    screen_enter
     while true; do
         FLOW=""; PAGE_TOTAL=0; CONTEXT=""; DIR=fwd
-        new_stage
+        new_stage; fit
         cls
         big_logo
         echo
@@ -4150,7 +4170,7 @@ main_menu() {
             quit)     break ;;
         esac
     done
-    cls
+    screen_leave
     printf '\n  %s  %sbye%s\n\n' "$(grad '◆ VPN·LXC')" "$GR" "$R"
 }
 

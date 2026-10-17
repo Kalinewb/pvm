@@ -17,9 +17,18 @@ else
     ANIM=0
 fi
 
-COLS=$(tput cols 2>/dev/null || echo 80)
-[[ $COLS =~ ^[0-9]+$ ]] || COLS=80
-W=$((COLS - 4)); [ "$W" -gt 78 ] && W=78; [ "$W" -lt 50 ] && W=50
+# The layout follows the terminal: re-read the size whenever a screen is drawn, so a resize shows on the next screen.
+fit() {
+    COLS=$(tput cols 2>/dev/null || echo 80)
+    [[ $COLS =~ ^[0-9]+$ ]] || COLS=80
+    W=$((COLS - 4)); [ "$W" -gt 160 ] && W=160; [ "$W" -lt 50 ] && W=50
+}
+fit
+
+# full-screen mode: the app draws on the terminal's alternate screen and leaves your scrollback as it was
+ALT=0
+screen_enter() { if [ "$INTERACTIVE" = 1 ] && [ "$ALT" = 0 ]; then printf '\e[?1049h\e[H\e[2J'; ALT=1; fi; return 0; }
+screen_leave() { if [ "$ALT" = 1 ]; then printf '\e[?1049l'; ALT=0; fi; return 0; }
 
 GRAD256=(51 45 39 33 63 99 135 171 207)
 
@@ -131,7 +140,7 @@ pbar() {   # pbar <done> <total> <width>
 }
 
 page() {   # page "Title" ["subtitle"]
-    cls
+    fit; cls
     local head right n
     head="$(grad '◆ VPN·LXC')  ${GR}v$VERSION$R"
     right="$GR$FLOW$R"
@@ -415,11 +424,13 @@ pick() {
         IFS='|' read -r k l d <<<"$it"
         keys+=("$k"); labels+=("$l"); descs+=("$d")
     done
-    local n=${#keys[@]} cur=0 top=0 numbuf="" vis drawn
+    local n=${#keys[@]} cur=0 top=0 numbuf="" vis drawn gap=0 rows
+    rows=$(tput lines 2>/dev/null || echo 24); [[ $rows =~ ^[0-9]+$ ]] || rows=24
+    [ "$rows" -ge 36 ] && [ "$n" -le 10 ] && gap=1          # a tall terminal: a blank line between choices
     for ((i = 0; i < n; i++)); do [ "${keys[i]}" = "$__def" ] && cur=$i; done
-    vis=$(list_rows); [ "$vis" -gt "$n" ] && vis=$n
+    vis=$(( $(list_rows) / (1 + gap) )); [ "$vis" -lt 3 ] && vis=3; [ "$vis" -gt "$n" ] && vis=$n
     [ "$cur" -ge "$vis" ] && top=$((cur - vis + 1))
-    drawn=$((vis + 2))
+    drawn=$((vis * (1 + gap) + 2))
     printf '    %s›%s %s  %s↑↓ move · ⏎ choose · b back · q quit%s\n' "$CY" "$R" "$__q" "$GR" "$R"
     cur_hide
     local first=1
@@ -432,6 +443,7 @@ pick() {
             else
                 printf '    %s%s%s%s %s%s%s\n' "$CY" "$(num $((i + 1)))" "$R" "$(padr "${labels[i]}" 22)" "$DG" "${descs[i]}" "$R"
             fi
+            [ "$gap" = 1 ] && printf '\n'
         done
         if [ "$n" -gt "$vis" ]; then printf '    %s%s of %s%s\n' "$DG" "$((cur + 1))" "$n" "$R"; else printf '\n'; fi
         read_key

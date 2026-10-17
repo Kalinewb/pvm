@@ -18,20 +18,23 @@ probe_all() {   # probe_all DIR : brief status of every managed container, in pa
 
 ago() { local s=$1; if [ "$s" -lt 0 ]; then echo "—"; elif [ "$s" -lt 120 ]; then echo "${s}s"; else echo "$((s / 60))m"; fi; }
 
+hb() { awk -v b="${1:-0}" 'BEGIN { split("B KiB MiB GiB TiB", u); i = 1; while (b >= 1024 && i < 5) { b /= 1024; i++ } printf "%.1f%s", b, u[i] }'; }
+
 dash_row() {   # dash_row ID [indent]
-    local id=$1 d="$STAGE/dash" name role st dot line
+    local id=$1 d="$STAGE/dash" name role st dot line nw=12 more=""
+    [ "$W" -ge 100 ] && nw=18; [ "$W" -ge 130 ] && nw=24
     name=$(reg_get "$id" NAME); role=$(reg_get "$id" ROLE); st=$(ct_status "$id")
     local -A BR=()
     [ -f "$d/$id" ] && read_kv_into BR "" < "$d/$id"
     if [ "$st" != running ]; then
         DASH_OFF=$((DASH_OFF + 1))
-        dot="$DG○$R"; line=$(printf '%s %-4s %-12.12s %s%-7s%s %s%s%s' "$dot" "$id" "$name" "$GR" "$role" "$R" "$DG" "$st" "$R")
+        dot="$DG○$R"; line=$(printf '%s %-4s %-*.*s %s%-7s%s %s%s%s' "$dot" "$id" "$nw" "$nw" "$name" "$GR" "$role" "$R" "$DG" "$st" "$R")
     elif [ "$role" = client ]; then
         local ip gwexit
         ip=$(cat "$d/$id.ip" 2>/dev/null)
         gwexit=$(kvfile_get "$d/$(reg_get "$id" GATEWAY)" EXIT_IP)
         if [ -n "$ip" ] && [ "$ip" = "$gwexit" ]; then dot="$OK●$R"; DASH_OK=$((DASH_OK + 1)); else dot="$WA●$R"; DASH_BAD=$((DASH_BAD + 1)); fi
-        line=$(printf '  %s└%s %s %-4s %-11.11s %s%-13s%s %s' "$DG" "$R" "$dot" "$id" "$name" "$GR" "$(reg_get "$id" IP)" "$R" \
+        line=$(printf '  %s└%s %s %-4s %-*.*s %s%-13s%s %s' "$DG" "$R" "$dot" "$id" "$((nw - 1))" "$((nw - 1))" "$name" "$GR" "$(reg_get "$id" IP)" "$R" \
             "$([ -n "$ip" ] && [ "$ip" = "$gwexit" ] && echo "${OK}via gateway${R}" || echo "${WA}${ip:-no answer}${R}")")
     else
         local prov proto exit extra=""
@@ -43,7 +46,11 @@ dash_row() {   # dash_row ID [indent]
         [ -n "${BR[PF_PORT]:-}" ] && extra="$extra ${CY}⇅${BR[PF_PORT]}${R}"
         [ "${BR[ACTIVE]:-}" = backup ] && extra="$extra ${WA}⟲backup${R}"
         [ "${BR[PROTO]:-}" = wireguard ] && [ "${BR[HS_AGE]:--1}" -ge 0 ] && extra="$extra ${DG}$(ago "${BR[HS_AGE]}")${R}"
-        line=$(printf '%s %-4s %-12.12s %s%-7s%s %s %s%s' "$dot" "$id" "$name" "$GR" "$role" "$R" "$(padr "${prov%% *} · $proto" 14)" "$exit" "$extra")
+        if [ "$W" -ge 100 ]; then
+            [ "$role" = gateway ] && more="  ${DG}$(reg_get "$id" BRIDGE) · $(reg_get "$id" LAN_ADDR)${R}"
+            [ "$W" -ge 130 ] && [ -n "${BR[RX]:-}" ] && more="$more  ${DG}▼$(hb "${BR[RX]}") ▲$(hb "${BR[TX]:-0}")${R}"
+        fi
+        line=$(printf '%s %-4s %-*.*s %s%-7s%s %s %s%s%s' "$dot" "$id" "$nw" "$nw" "$name" "$GR" "$role" "$R" "$(padr "${prov%% *} · $proto" 14)" "$exit" "$extra" "$more")
     fi
     box_row "$line"
 }
@@ -79,7 +86,7 @@ dashboard() {   # dashboard [cached] : "cached" draws what probe_all already col
     local wd="${ER}off${R}"
     systemctl is-active --quiet vpn-lxc-watchdog.timer 2>/dev/null && wd="${OK}on${R}"
     local nk; nk=$(set_get NOTIFY_KIND); nk=${nk:-none}
-    box_row "${DG}$(rep ─ $((W - 5)))${R}"
+    box_row "${DG}$(rep ─ $((W - 4)))${R}"
     local sum="${OK}✔ $DASH_OK protected${R}"
     [ "$DASH_BAD" -gt 0 ] && sum="$sum   ${WA}▲ $DASH_BAD need attention${R}"
     [ "$DASH_OFF" -gt 0 ] && sum="$sum   ${DG}○ $DASH_OFF stopped${R}"

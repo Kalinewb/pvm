@@ -3,9 +3,10 @@
 # ════════════════════════════════════════════════════════════
 main_menu() {
     local m rc
+    screen_enter
     while true; do
         FLOW=""; PAGE_TOTAL=0; CONTEXT=""; DIR=fwd
-        new_stage
+        new_stage; fit
         cls
         big_logo
         echo
@@ -37,7 +38,7 @@ main_menu() {
             quit)     break ;;
         esac
     done
-    cls
+    screen_leave
     printf '\n  %s  %sbye%s\n\n' "$(grad '◆ VPN·LXC')" "$GR" "$R"
 }
 

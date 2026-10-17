@@ -1,6 +1,6 @@
 <p align="center"><img src="docs/hero.svg" alt="vpn-lxc: a VPN dashboard for your Proxmox containers" width="100%"></p>
 
-**vpn-lxc** puts Proxmox containers behind a VPN, with a kill switch, from a simple dashboard you drive with the arrow keys.
+**vpn-lxc** puts Proxmox containers behind a VPN, with a kill switch, from a full-screen dashboard you drive with the arrow keys. It fills your terminal, and the layout follows its size.
 WireGuard or OpenVPN, any provider (Mullvad, Proton, AirVPN, others). Set it up once; it keeps itself working.
 
 <p align="center"><img src="docs/dashboard.svg" alt="The vpn-lxc dashboard" width="90%"></p>
