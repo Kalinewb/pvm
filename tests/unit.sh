@@ -153,5 +153,13 @@ lib_delete gone
 ls "$LIB/.trash"/gone.*.conf >/dev/null 2>&1 && ok || bad "deleted config was not kept in the trash"
 lib_names | grep -q '^gone$' && bad "trash entry shows up as a saved config" || ok
 
+
+# ── pasting shows what arrives, but never a key ──
+shown=$(printf 'PrivateKey = SECRETKEYSECRETKEYSECRETKEY=\nAddress = 10.2.0.2/32\n<key>\nINLINESECRET\n</key>\nEND\n' | NO_COLOR=1 paste_block "$T/paste.conf")
+has "paste shows normal lines" "$shown" "Address = 10.2.0.2/32"
+lacks "paste hides the private key" "$shown" SECRETKEY
+lacks "paste hides inline key blocks" "$shown" INLINESECRET
+eq "paste keeps the real key in the file" "$(grep -c SECRETKEY "$T/paste.conf")" 1
+
 echo "passed $pass, failed $failn"
 [ "$failn" = 0 ]

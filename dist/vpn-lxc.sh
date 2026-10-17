@@ -23,7 +23,7 @@ set -o pipefail
 umask 077
 export LC_ALL=C.UTF-8
 
-VERSION="3.0.2"
+VERSION="3.0.3"
 BIN_DIR=${PVM_BIN_DIR:-/usr/local/sbin}
 REPO_RAW=${PVM_RAW:-https://raw.githubusercontent.com/Kalinewb/pvm}
 REPO_API=${PVM_API:-https://api.github.com/repos/Kalinewb/pvm}
@@ -60,6 +60,8 @@ fi
 fit() {
     COLS=$(tput cols 2>/dev/null || echo 80)
     [[ $COLS =~ ^[0-9]+$ ]] || COLS=80
+    ROWS=$(tput lines 2>/dev/null || echo 24)
+    [[ $ROWS =~ ^[0-9]+$ ]] || ROWS=24
     W=$((COLS - 4)); [ "$W" -gt 240 ] && W=240; [ "$W" -lt 50 ] && W=50
 }
 fit
@@ -67,11 +69,11 @@ fit
 # statusbar "hints" : a full-width bar on the last row (keys on the left, host and time on the right)
 statusbar() {
     [ "$INTERACTIVE" = 1 ] || return 0
-    local rows left right pad
-    rows=$(tput lines 2>/dev/null || echo 24); [[ $rows =~ ^[0-9]+$ ]] || return 0
+    local rows=${ROWS:-24} left right pad now
     [ "$rows" -ge 22 ] || return 0
+    printf -v now '%(%H:%M)T' -1
     left=" PVM $VERSION   ${1:-}"
-    right="$(hostname) · $(date +%H:%M) "
+    right="${HOSTN:=$(hostname)} · $now "
     pad=$((COLS - ${#left} - ${#right})); [ "$pad" -lt 1 ] && pad=1
     printf '\e7\e[%d;1H%s%s%s%*s%s%s\e8' "$rows" "$BARBG" "$WH" "$left" "$pad" "" "$right" "$R"
 }
@@ -83,7 +85,8 @@ screen_leave() { if [ "$ALT" = 1 ]; then printf '\e[?1049l'; ALT=0; fi; return 0
 
 GRAD256=(51 45 39 33 63 99 135 171 207)
 
-vislen() { local s; s=$(printf '%s' "$1" | sed $'s/\x1b\\[[0-9;]*m//g'); printf '%s' "${#s}"; }
+shopt -s extglob
+vislen() { local s=${1//$'\e['*([0-9;?])[A-Za-z]/}; printf '%s' "${#s}"; }
 rep()    { local n=$2 s=""; while [ "$n" -gt 0 ]; do s+=$1; n=$((n - 1)); done; printf '%s' "$s"; }
 nap()    { [ "$ANIM" = 1 ] && sleep "$1"; return 0; }
 padr()   { local l; l=$(vislen "$1"); printf '%s%*s' "$1" "$(( $2 > l ? $2 - l : 0 ))" ''; }   # pad by characters, not bytes
@@ -110,8 +113,9 @@ grad() {
 
 clr()       { [ "$FANCY" = 1 ] && printf '\r\e[K'; return 0; }
 cls()       { [ "$FANCY" = 1 ] && printf '\e[H\e[2J'; return 0; }
-cur_hide()  { [ "$FANCY" = 1 ] && printf '\e[?25l'; return 0; }
-cur_show()  { [ "$FANCY" = 1 ] && printf '\e[?25h'; return 0; }
+# While a menu waits for keys, the terminal must not echo them: a held arrow key would print ^[[B over the screen.
+cur_hide()  { [ "$FANCY" = 1 ] && { printf '\e[?25l'; stty -echo 2>/dev/null; }; return 0; }
+cur_show()  { [ "$FANCY" = 1 ] && { printf '\e[?25h'; stty echo 2>/dev/null; }; return 0; }
 rule()      { printf '  %s%s%s\n' "$DG" "$(rep ─ "$W")" "$R"; }
 chip()      { printf '%s%s %s %s' "$CHIPBG" "${2:-$WH}" "$1" "$R"; }
 keyhint()   { printf '%s%s %s %s %s%s%s' "$CHIPBG" "$WH" "$1" "$R" "$GR" "$2" "$R"; }
@@ -206,7 +210,7 @@ page() {   # page "Title" ["subtitle"]
     local keys
     keys="$(keyhint '⏎' next)  $(keyhint b back)  $(keyhint q quit)"
     # the status bar at the bottom already shows the keys on a real terminal
-    [ "$INTERACTIVE" = 1 ] && [ "$(tput lines 2>/dev/null || echo 0)" -ge 22 ] && keys=""
+    [ "$INTERACTIVE" = 1 ] && [ "${ROWS:-24}" -ge 22 ] && keys=""
     if [ -n "$CONTEXT" ] && [ -z "$keys" ]; then printf '  %s\n' "$CONTEXT"
     elif [ -n "$CONTEXT" ]; then
         n=$((W - $(vislen "$CONTEXT") - $(vislen "$keys")))
@@ -500,6 +504,8 @@ pick() {
     cur_hide
     local first=1
     while true; do
+        if [ "$first" = 0 ] && read -t 0 2>/dev/null; then :   # more keys are already waiting (key repeat): skip drawing, handle them first
+        else
         [ "$first" = 1 ] || printf '\e[%dA\e[J' "$((drawn - 1))"
         first=0
         for ((i = top; i < top + vis; i++)); do
@@ -512,6 +518,7 @@ pick() {
         done
         if [ "$n" -gt "$vis" ]; then printf '    %s%s of %s%s\n' "$DG" "$((cur + 1))" "$n" "$R"; else printf '\n'; fi
         statusbar "↑↓ move   ⏎ choose   b back   q quit"
+        fi
         read_key
         [[ $KEY =~ ^[0-9]$ ]] || numbuf=""
         case $KEY in
@@ -548,6 +555,8 @@ checklist() {
     cur_hide
     local first=1 mark
     while true; do
+        if [ "$first" = 0 ] && read -t 0 2>/dev/null; then :   # more keys are already waiting (key repeat): skip drawing, handle them first
+        else
         [ "$first" = 1 ] || printf '\e[%dA\e[J' "$((drawn - 1))"
         first=0
         for ((i = top; i < top + vis; i++)); do
@@ -560,6 +569,7 @@ checklist() {
         done
         if [ "$n" -gt "$vis" ]; then printf '    %s%s of %s%s\n' "$DG" "$((cur + 1))" "$n" "$R"; else printf '\n'; fi
         statusbar "↑↓ move   space tick   a all   n none   ⏎ done   b back"
+        fi
         read_key
         [[ $KEY =~ ^[0-9]$ ]] || numbuf=""
         case $KEY in
@@ -611,21 +621,31 @@ yn() {
 
 # paste_block FILE : read a pasted block silently until a line "END" or Ctrl-D
 paste_block() {
-    local f=$1 line count=0
+    local f=$1 line count=0 inblk="" blkn=0 shown low
     : > "$f"
     printf '    %sPaste the whole config now, then type %sEND%s%s on its own line (or press Ctrl-D).%s\n' "$GR" "$WH$B" "$R" "$GR" "$R"
-    printf '    %sNothing is shown on screen while you paste, so the key never sits in your scrollback.%s\n\n' "$GR" "$R"
+    printf '    %sYou will see what arrives. Keys and passwords are hidden, so they never sit in your scrollback.%s\n\n' "$GR" "$R"
     cur_hide
     while IFS= read -rs line; do
         line=${line//$'\e[200~'/}; line=${line//$'\e[201~'/}; line=${line%$'\r'}
         [ "$(trim "$line")" = END ] && break
         printf '%s\n' "$line" >> "$f"
         count=$((count + 1))
-        printf '\r    %s◉%s receiving… %s%d lines%s ' "$PK" "$R" "$B" "$count" "$R"
+        # what to show: the line as it is, except secrets
+        line=${line//[[:cntrl:]]/}; low=${line,,}; shown=$line
+        if [ -n "$inblk" ]; then                                 # inside <key>...</key>, <ca>... : count, don't print
+            if [[ $low =~ ^[[:space:]]*\</${inblk,,}\> ]]; then shown="</$inblk>   ${GR}($blkn lines hidden)${R}"; inblk=""
+            else blkn=$((blkn + 1)); continue; fi
+        elif [[ $line =~ ^[[:space:]]*\<([A-Za-z0-9-]+)\>[[:space:]]*$ ]]; then
+            inblk=${BASH_REMATCH[1]}; blkn=0; shown="<$inblk>"
+        elif [[ $low =~ ^[[:space:]]*(privatekey|presharedkey|auth-user-pass-secret|password)[[:space:]]*[=\ ] ]]; then
+            shown="${line%%[=\ ]*} = ${GR}●●●●●●●●●●●●●●●● (hidden)${R}"
+        fi
+        [ "${#shown}" -gt $((W - 10)) ] && shown="${shown:0:$((W - 13))}..."
+        printf '    %s%3d%s  %s\n' "$DG" "$count" "$R" "$shown"
     done
-    clr
     cur_show
-    printf '    %s✔%s received %s lines\n' "$OK" "$R" "$count"
+    printf '\n    %s✔%s received %s lines\n' "$OK" "$R" "$count"
     [ "$count" -gt 0 ]
 }
 
