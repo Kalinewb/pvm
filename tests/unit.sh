@@ -161,5 +161,16 @@ lacks "paste hides the private key" "$shown" SECRETKEY
 lacks "paste hides inline key blocks" "$shown" INLINESECRET
 eq "paste keeps the real key in the file" "$(grep -c SECRETKEY "$T/paste.conf")" 1
 
+
+# ── a paste can always be finished ──
+CFGP=$'[Interface]\nPrivateKey = abc=\nAddress = 10.2.0.2/32\n[Peer]\nEndpoint = 1.2.3.4:51820\nPersistentKeepalive = 25'
+pb() { printf '%s' "$1" | NO_COLOR=1 paste_block "$T/pb.conf" >/dev/null 2>&1; echo "$? $(tail -n 1 "$T/pb.conf")"; }
+eq "END on its own line" "$(pb "$CFGP"$'\nEND\n')" "0 PersistentKeepalive = 25"
+eq "any capitals"        "$(pb "$CFGP"$'\nEnd\n')" "0 PersistentKeepalive = 25"
+eq "END typed right after the last line" "$(pb "$CFGP"End$'\n')" "0 PersistentKeepalive = 25"
+eq "end of input"        "$(pb "$CFGP"$'\n')" "0 PersistentKeepalive = 25"
+eq "q cancels"           "$(pb $'q\n')" "1 "
+[ "$(pb "$CFGP"$'\n\n\n' | cut -c1)" = 0 ] && ok || bad "two empty lines should finish a paste"
+
 echo "passed $pass, failed $failn"
 [ "$failn" = 0 ]

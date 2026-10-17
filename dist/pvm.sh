@@ -23,7 +23,7 @@ set -o pipefail
 umask 077
 export LC_ALL=C.UTF-8
 
-VERSION="3.0.3"
+VERSION="3.0.4"
 BIN_DIR=${PVM_BIN_DIR:-/usr/local/sbin}
 REPO_RAW=${PVM_RAW:-https://raw.githubusercontent.com/Kalinewb/pvm}
 REPO_API=${PVM_API:-https://api.github.com/repos/Kalinewb/pvm}
@@ -621,21 +621,32 @@ yn() {
 
 # paste_block FILE : read a pasted block silently until a line "END" or Ctrl-D
 paste_block() {
-    local f=$1 line count=0 inblk="" blkn=0 shown low
+    local f=$1 line tl count=0 inblk="" blkn=0 shown low blank=0 finish=0 cancelled=0
     : > "$f"
-    printf '    %sPaste the whole config now, then type %sEND%s%s on its own line (or press Ctrl-D).%s\n' "$GR" "$WH$B" "$R" "$GR" "$R"
+    printf '    %sPaste the whole config now. When it has all arrived, finish with any of these:%s\n' "$GR" "$R"
+    printf '      %s· type %sEND%s%s (any capitals) and press Enter, even straight after the last line%s\n' "$GR" "$WH$B" "$R" "$GR" "$R"
+    printf '      %s· or press Enter twice%s     %s· or Ctrl-D%s     %s· or type %sq%s%s and Enter to cancel%s\n' "$GR" "$R" "$GR" "$R" "$GR" "$WH$B" "$R" "$GR" "$R"
     printf '    %sYou will see what arrives. Keys and passwords are hidden, so they never sit in your scrollback.%s\n\n' "$GR" "$R"
+    statusbar "paste the config   then END, or Enter twice, or Ctrl-D   (q = cancel)"
     cur_hide
     while IFS= read -rs line; do
         line=${line//$'\e[200~'/}; line=${line//$'\e[201~'/}; line=${line%$'\r'}
-        [ "$(trim "$line")" = END ] && break
+        tl=$(trim "$line")
+        [[ ${tl,,} == end ]] && break
+        # "...= 25End": the paste had no final newline, so END was typed right after the last line
+        if [[ $line =~ ^(.*[^A-Za-z])(END|End)$ ]]; then line=${BASH_REMATCH[1]}; tl=$(trim "$line"); finish=1; fi
+        if [ "$count" = 0 ] && [[ ${tl,,} =~ ^(q|b|quit|back|cancel)$ ]]; then cancelled=1; break; fi
+        if [ -z "$tl" ]; then
+            blank=$((blank + 1))
+            [ "$blank" -ge 2 ] && [ "$count" -ge 3 ] && break          # two empty lines in a row after some content = done
+        else blank=0; fi
         printf '%s\n' "$line" >> "$f"
         count=$((count + 1))
         # what to show: the line as it is, except secrets
         line=${line//[[:cntrl:]]/}; low=${line,,}; shown=$line
         if [ -n "$inblk" ]; then                                 # inside <key>...</key>, <ca>... : count, don't print
             if [[ $low =~ ^[[:space:]]*\</${inblk,,}\> ]]; then shown="</$inblk>   ${GR}($blkn lines hidden)${R}"; inblk=""
-            else blkn=$((blkn + 1)); continue; fi
+            else blkn=$((blkn + 1)); [ "$finish" = 1 ] && break; continue; fi
         elif [[ $line =~ ^[[:space:]]*\<([A-Za-z0-9-]+)\>[[:space:]]*$ ]]; then
             inblk=${BASH_REMATCH[1]}; blkn=0; shown="<$inblk>"
         elif [[ $low =~ ^[[:space:]]*(privatekey|presharedkey|auth-user-pass-secret|password)[[:space:]]*[=\ ] ]]; then
@@ -643,8 +654,10 @@ paste_block() {
         fi
         [ "${#shown}" -gt $((W - 10)) ] && shown="${shown:0:$((W - 13))}..."
         printf '    %s%3d%s  %s\n' "$DG" "$count" "$R" "$shown"
+        [ "$finish" = 1 ] && break
     done
     cur_show
+    if [ "$cancelled" = 1 ]; then printf '\n    %scancelled%s\n' "$GR" "$R"; return 1; fi
     printf '\n    %s✔%s received %s lines\n' "$OK" "$R" "$count"
     [ "$count" -gt 0 ]
 }

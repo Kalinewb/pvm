@@ -81,7 +81,7 @@ def dash():
 # ───────────────────────── express setup ─────────────────────────
 def express():
     lines = [
-        [("  ◆ PVM  v3.0.3", "pk", True), ("                                                  VPN gateways", "gr")],
+        [("  ◆ PVM  v3.0.4", "pk", True), ("                                                  VPN gateways", "gr")],
         [("  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", "cy")],
         [("", "wh")],
         [("  ▍ ", "vi"), ("New VPN gateway", "wh", True)],
