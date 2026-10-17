@@ -23,7 +23,7 @@ set -o pipefail
 umask 077
 export LC_ALL=C.UTF-8
 
-VERSION="2.3"
+VERSION="2.4"
 REPO_RAW=${VPNLXC_RAW:-https://raw.githubusercontent.com/Kalinewb/vpn-lxc}
 SELF=$(readlink -f "$0" 2>/dev/null || echo "$0")
 ETC=${VPNLXC_ETC:-/etc/vpn-lxc}
@@ -47,10 +47,10 @@ if [ "$FANCY" = 1 ]; then
     R=$'\e[0m'; B=$'\e[1m'; DIM=$'\e[2m'; IT=$'\e[3m'
     CY=$'\e[38;5;81m'; VI=$'\e[38;5;141m'; PK=$'\e[38;5;213m'
     OK=$'\e[38;5;84m'; ER=$'\e[38;5;203m'; WA=$'\e[38;5;221m'
-    GR=$'\e[38;5;244m'; DG=$'\e[38;5;238m'; WH=$'\e[38;5;255m'
-    CHIPBG=$'\e[48;5;236m'
+    GR=$'\e[38;5;249m'; DG=$'\e[38;5;241m'; WH=$'\e[38;5;255m'
+    CHIPBG=$'\e[48;5;236m'; SELBG=$'\e[48;5;24m'; BARBG=$'\e[48;5;235m'; F0=$'\e[39;22m'
 else
-    R=""; B=""; DIM=""; IT=""; CY=""; VI=""; PK=""; OK=""; ER=""; WA=""; GR=""; DG=""; WH=""; CHIPBG=""
+    R=""; B=""; DIM=""; IT=""; CY=""; VI=""; PK=""; OK=""; ER=""; WA=""; GR=""; DG=""; WH=""; CHIPBG=""; SELBG=""; BARBG=""; F0=""
     ANIM=0
 fi
 
@@ -58,9 +58,21 @@ fi
 fit() {
     COLS=$(tput cols 2>/dev/null || echo 80)
     [[ $COLS =~ ^[0-9]+$ ]] || COLS=80
-    W=$((COLS - 4)); [ "$W" -gt 160 ] && W=160; [ "$W" -lt 50 ] && W=50
+    W=$((COLS - 4)); [ "$W" -gt 240 ] && W=240; [ "$W" -lt 50 ] && W=50
 }
 fit
+
+# statusbar "hints" : a full-width bar on the last row (keys on the left, host and time on the right)
+statusbar() {
+    [ "$INTERACTIVE" = 1 ] || return 0
+    local rows left right pad
+    rows=$(tput lines 2>/dev/null || echo 24); [[ $rows =~ ^[0-9]+$ ]] || return 0
+    [ "$rows" -ge 22 ] || return 0
+    left=" vpn-lxc $VERSION   ${1:-}"
+    right="$(hostname) · $(date +%H:%M) "
+    pad=$((COLS - ${#left} - ${#right})); [ "$pad" -lt 1 ] && pad=1
+    printf '\e7\e[%d;1H%s%s%s%*s%s%s\e8' "$rows" "$BARBG" "$WH" "$left" "$pad" "" "$right" "$R"
+}
 
 # full-screen mode: the app draws on the terminal's alternate screen and leaves your scrollback as it was
 ALT=0
@@ -191,15 +203,19 @@ page() {   # page "Title" ["subtitle"]
     fi
     local keys
     keys="$(keyhint '⏎' next)  $(keyhint b back)  $(keyhint q quit)"
-    if [ -n "$CONTEXT" ]; then
+    # the status bar at the bottom already shows the keys on a real terminal
+    [ "$INTERACTIVE" = 1 ] && [ "$(tput lines 2>/dev/null || echo 0)" -ge 22 ] && keys=""
+    if [ -n "$CONTEXT" ] && [ -z "$keys" ]; then printf '  %s\n' "$CONTEXT"
+    elif [ -n "$CONTEXT" ]; then
         n=$((W - $(vislen "$CONTEXT") - $(vislen "$keys")))
         [ "$n" -lt 1 ] && n=1
         printf '  %s%*s%s\n' "$CONTEXT" "$n" "" "$keys"
-    elif [ "$PAGE_TOTAL" -gt 0 ]; then
+    elif [ "$PAGE_TOTAL" -gt 0 ] && [ -n "$keys" ]; then
         n=$((W - $(vislen "$keys")))
         printf '  %*s%s\n' "$n" "" "$keys"
     fi
     echo
+    statusbar "$([ "$PAGE_TOTAL" -gt 0 ] && echo "⏎ next   b back   q quit" || echo "b back   q quit")"
     printf '  %s▍%s %s%s%s\n' "$VI" "$R" "$B$WH" "$1" "$R"
     [ -n "${2:-}" ] && para "$2"
     echo
@@ -239,6 +255,7 @@ confirm_quit() {
 field() {
     local __var=$1 __label=$2 __def=${3-} __vf=${4:-v_any} __a __out
     while true; do
+        statusbar "type a value   ⏎ accept the suggestion   b back   q quit"
         if [ -n "$__def" ]; then
             printf '    %s›%s %s %s[%s]%s ' "$CY" "$R" "$__label" "$GR" "$__def" "$R"
         else
@@ -341,7 +358,7 @@ checklist_text() {
             if [ "${state[i]}" = 1 ]; then
                 printf '    %s%s%s%s◉%s %s%s%s %s%s%s\n' "$CY" "$(num $((i + 1)))" "$R" "$OK" "$R" "$B" "$(padr "${labels[i]}" 24)" "$R" "$GR" "${descs[i]}" "$R"
             else
-                printf '    %s%s%s%s○%s %s %s%s%s\n' "$CY" "$(num $((i + 1)))" "$R" "$DG" "$R" "$(padr "${labels[i]}" 24)" "$DG" "${descs[i]}" "$R"
+                printf '    %s%s%s%s○%s %s %s%s%s\n' "$CY" "$(num $((i + 1)))" "$R" "$DG" "$R" "$(padr "${labels[i]}" 24)" "$GR" "${descs[i]}" "$R"
             fi
         done
         echo
@@ -379,6 +396,13 @@ checklist_text() {
 # ════════════════════════════════════════════════════════════
 INTERACTIVE=0
 if [ "$FANCY" = 1 ] && [ -t 0 ]; then INTERACTIVE=1; fi
+
+# bar_row TEXT : one list row drawn as a highlighted bar the width of the layout
+bar_row() {
+    local text=$1 pad
+    pad=$((W - 1 - $(vislen "$text"))); [ "$pad" -lt 0 ] && pad=0
+    printf '  %s%s%*s%s\n' "$SELBG" "$text" "$pad" "" "$R"
+}
 
 # read_key : sets KEY to up down left right home end pgup pgdn enter space esc bksp eof, or the character
 KEY=""
@@ -468,7 +492,9 @@ pick() {
     vis=$(( $(list_rows) / (1 + gap) )); [ "$vis" -lt 3 ] && vis=3; [ "$vis" -gt "$n" ] && vis=$n
     [ "$cur" -ge "$vis" ] && top=$((cur - vis + 1))
     drawn=$((vis * (1 + gap) + 2))
-    printf '    %s›%s %s  %s↑↓ move · ⏎ choose · b back · q quit%s\n' "$CY" "$R" "$__q" "$GR" "$R"
+    if [ "$rows" -ge 22 ]; then printf '    %s›%s %s\n' "$CY" "$R" "$__q"      # the status bar shows the keys
+    else printf '    %s›%s %s  %s↑↓ move · ⏎ choose · b back · q quit%s\n' "$CY" "$R" "$__q" "$GR" "$R"; fi
+    [ "$gap" = 1 ] && printf '\n'
     cur_hide
     local first=1
     while true; do
@@ -476,13 +502,14 @@ pick() {
         first=0
         for ((i = top; i < top + vis; i++)); do
             if [ "$i" = "$cur" ]; then
-                printf '  %s❯%s %s%s%s%s%s%s %s%s%s\n' "$PK" "$R" "$CY" "$(num $((i + 1)))" "$R" "$B$WH" "$(padr "${labels[i]}" 22)" "$R" "$GR" "${descs[i]}" "$R"
+                bar_row "$(printf '%s❯%s %s%s%s%s%s%s %s%s%s' "$PK" "$F0" "$CY" "$(num $((i + 1)))" "$F0" "$B$WH" "$(padr "${labels[i]}" 22)" "$F0" "$GR" "${descs[i]}" "$F0")"
             else
-                printf '    %s%s%s%s %s%s%s\n' "$CY" "$(num $((i + 1)))" "$R" "$(padr "${labels[i]}" 22)" "$DG" "${descs[i]}" "$R"
+                printf '    %s%s%s%s %s%s%s\n' "$CY" "$(num $((i + 1)))" "$R" "$(padr "${labels[i]}" 22)" "$GR" "${descs[i]}" "$R"
             fi
             [ "$gap" = 1 ] && printf '\n'
         done
         if [ "$n" -gt "$vis" ]; then printf '    %s%s of %s%s\n' "$DG" "$((cur + 1))" "$n" "$R"; else printf '\n'; fi
+        statusbar "↑↓ move   ⏎ choose   b back   q quit"
         read_key
         [[ $KEY =~ ^[0-9]$ ]] || numbuf=""
         case $KEY in
@@ -513,7 +540,9 @@ checklist() {
     local n=${#ids[@]} cur=0 top=0 numbuf="" vis drawn
     vis=$(list_rows); [ "$vis" -gt "$n" ] && vis=$n
     drawn=$((vis + 2))
-    printf '    %s›%s %s  %s↑↓ move · space tick · a all · n none · ⏎ done · b back · q quit%s\n' "$CY" "$R" "$__q" "$GR" "$R"
+    local crow; crow=$(tput lines 2>/dev/null || echo 24)
+    if [ "${crow:-24}" -ge 22 ]; then printf '    %s›%s %s\n' "$CY" "$R" "$__q"
+    else printf '    %s›%s %s  %s↑↓ move · space tick · a all · n none · ⏎ done · b back · q quit%s\n' "$CY" "$R" "$__q" "$GR" "$R"; fi
     cur_hide
     local first=1 mark
     while true; do
@@ -522,12 +551,13 @@ checklist() {
         for ((i = top; i < top + vis; i++)); do
             if [ "${state[i]}" = 1 ]; then mark="${OK}◉${R}"; else mark="${DG}○${R}"; fi
             if [ "$i" = "$cur" ]; then
-                printf '  %s❯%s %s%s%s %s %s%s%s %s%s%s\n' "$PK" "$R" "$CY" "$(num $((i + 1)))" "$R" "$mark" "$B$WH" "$(padr "${labels[i]}" 24)" "$R" "$GR" "${descs[i]}" "$R"
+                bar_row "$(printf '%s❯%s %s%s%s %s %s%s%s %s%s%s' "$PK" "$F0" "$CY" "$(num $((i + 1)))" "$F0" "${mark//$R/$F0}" "$B$WH" "$(padr "${labels[i]}" 24)" "$F0" "$GR" "${descs[i]}" "$F0")"
             else
-                printf '    %s%s%s %s %s %s%s%s\n' "$CY" "$(num $((i + 1)))" "$R" "$mark" "$(padr "${labels[i]}" 24)" "$DG" "${descs[i]}" "$R"
+                printf '    %s%s%s %s %s %s%s%s\n' "$CY" "$(num $((i + 1)))" "$R" "$mark" "$(padr "${labels[i]}" 24)" "$GR" "${descs[i]}" "$R"
             fi
         done
         if [ "$n" -gt "$vis" ]; then printf '    %s%s of %s%s\n' "$DG" "$((cur + 1))" "$n" "$R"; else printf '\n'; fi
+        statusbar "↑↓ move   space tick   a all   n none   ⏎ done   b back"
         read_key
         [[ $KEY =~ ^[0-9]$ ]] || numbuf=""
         case $KEY in
