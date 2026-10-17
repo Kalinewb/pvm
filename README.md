@@ -26,6 +26,7 @@ Requirements: Proxmox VE (developed and tested on 9.x), containers running Debia
 <p align="center"><img src="docs/architecture.svg" alt="Gateways, tunnels and your home network" width="100%"></p>
 
 * **VPN gateways** – a small container holds one tunnel; containers on its private bridge go through it. Make as many as you like and name them (`media`, `private`, `downloads`...). One gateway is one VPN connection, however many containers sit behind it.
+* **Add containers** – plug more containers into a gateway you already have, from the menu. It reads the gateway back as it is and only reloads its firewall: no VPN questions, and the tunnel stays connected.
 * **Protect containers** – a container runs its own tunnel and kill switch, no gateway needed.
 * **One connection, one config.** A config (a WireGuard key, or an OpenVPN server list) that is already in use by one gateway or container is never offered for another, even in a later session, because a WireGuard key holds only one session.
 

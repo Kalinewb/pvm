@@ -537,6 +537,33 @@ client_detach() {   # client_detach CT : back to the network it had before
     reg_del "$c"
 }
 
+# attach_client CT : move one container behind the gateway described in V[gw.*] and register it.
+# Shared by the gateway wizard and the "Add containers" screen. A container that is already
+# registered behind this gateway only gets its published ports updated.
+attach_client() {
+    local c=$1 e publish_reg=""
+    for e in ${V[c$c.publish]:-}; do publish_reg="$publish_reg $e"; done
+    local g=${V[gw.ct]}
+    if [ "$(reg_get "$c" ROLE)" = client ]; then
+        reg_set "$c" PUBLISH "${publish_reg# }"
+        return 0
+    fi
+    section_head "CT $c ${V[c$c.name]}" "→ ${V[c$c.ip]} behind the gateway"
+    [ "${V[snap]}" = y ] && { run_task "snapshot" snapshot_ct "$c" || warn "no snapshot"; }
+    local was_tunnel=0; [ "$(reg_get "$c" ROLE)" = tunnel ] && was_tunnel=1
+    run_task "moving it to ${V[gw.bridge]}" client_move "$c" || { bad "could not move CT $c"; return 1; }
+    if [ "$was_tunnel" = 1 ] || [ "${D[c$c.HAS_SETUP]:-}" = 1 ]; then
+        cpush "$c" "$STAGE/payload/remove.sh" /tmp/vpnguard-remove.sh 700
+        cexec "$c" bash /tmp/vpnguard-remove.sh 0 1 2>&1 | render_stream
+    fi
+    cpush "$c" "$STAGE/payload/client.sh" /tmp/vpnguard-client.sh 700
+    cexec "$c" bash /tmp/vpnguard-client.sh "$(net_prefix "${V[gw.net]}").1" "${D[c$c.QBIT_CONF]:--}" 2>&1 | render_stream
+    run_task "restarting it on the new network" bash -c "pct reboot $c >/dev/null 2>&1 || { pct stop $c; pct start $c; }"
+    kvfile_del "$REG/$c.env" PROVIDER; kvfile_del "$REG/$c.env" PROTO
+    reg_set "$c" ROLE client; reg_set "$c" NAME "${V[c$c.name]}"; reg_set "$c" GATEWAY "$g"
+    reg_set "$c" IP "${V[c$c.ip]}"; reg_set "$c" PUBLISH "${publish_reg# }"
+}
+
 gateway_apply() {
     FLOW="VPN gateway"; CONTEXT=""; PAGE_TOTAL=0
     page "Applying" "The gateway's firewall goes up before its tunnel, and containers only move once the gateway works."
@@ -578,28 +605,7 @@ gateway_apply() {
     reg_set "$g" PROTO "${V[gw.primary.kind]}"; reg_set "$g" BRIDGE "${V[gw.bridge]}"; reg_set "$g" VPN_NET "${V[gw.net]}"
     [ "${V[gw.mode]}" = create ] && reg_set "$g" LAN_ADDR "${V[gw.lanaddr]}"
 
-    for c in ${V[gw.clients]}; do
-        local publish_reg="" e
-        for e in ${V[c$c.publish]:-}; do publish_reg="$publish_reg $e"; done
-        if [ "$(reg_get "$c" ROLE)" = client ]; then
-            reg_set "$c" PUBLISH "${publish_reg# }"
-            continue
-        fi
-        section_head "CT $c ${V[c$c.name]}" "→ ${V[c$c.ip]} behind the gateway"
-        [ "${V[snap]}" = y ] && { run_task "snapshot" snapshot_ct "$c" || warn "no snapshot"; }
-        local was_tunnel=0; [ "$(reg_get "$c" ROLE)" = tunnel ] && was_tunnel=1
-        run_task "moving it to ${V[gw.bridge]}" client_move "$c" || { bad "could not move CT $c"; continue; }
-        if [ "$was_tunnel" = 1 ] || [ "${D[c$c.HAS_SETUP]:-}" = 1 ]; then
-            cpush "$c" "$STAGE/payload/remove.sh" /tmp/vpnguard-remove.sh 700
-            cexec "$c" bash /tmp/vpnguard-remove.sh 0 1 2>&1 | render_stream
-        fi
-        cpush "$c" "$STAGE/payload/client.sh" /tmp/vpnguard-client.sh 700
-        cexec "$c" bash /tmp/vpnguard-client.sh "$(net_prefix "${V[gw.net]}").1" "${D[c$c.QBIT_CONF]:--}" 2>&1 | render_stream
-        run_task "restarting it on the new network" bash -c "pct reboot $c >/dev/null 2>&1 || { pct stop $c; pct start $c; }"
-        kvfile_del "$REG/$c.env" PROVIDER; kvfile_del "$REG/$c.env" PROTO
-        reg_set "$c" ROLE client; reg_set "$c" NAME "${V[c$c.name]}"; reg_set "$c" GATEWAY "$g"
-        reg_set "$c" IP "${V[c$c.ip]}"; reg_set "$c" PUBLISH "${publish_reg# }"
-    done
+    for c in ${V[gw.clients]}; do attach_client "$c"; done
     for c in ${V[gw.old_clients]:-}; do
         case " ${V[gw.clients]} " in *" $c "*) continue ;; esac
         section_head "CT $c" "leaves the gateway"

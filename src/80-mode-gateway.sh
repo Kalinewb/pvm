@@ -101,6 +101,7 @@ gw_intro() {
         V[gw.mode]=reconfig; V[gw.ct]=$g; V[gw.name]=$(reg_get "$g" NAME); V[gw.name]=${V[gw.name]:-$(ct_name "$g")}
         V[gw.bridge]=$(reg_get "$g" BRIDGE); V[gw.net]=$(reg_get "$g" VPN_NET); V[gw.lanaddr]=$(reg_get "$g" LAN_ADDR)
         page "Gateway ${V[gw.name]}" "CT $g. You can change its VPN, which containers sit behind it, and what's published to your home network."
+        note "only adding containers? Use Add containers on the main menu: it skips the VPN steps and never restarts the tunnel"
     else
         V[gw.mode]=create
         page "New VPN gateway" "A small container becomes a VPN router. Every container you plug into its private bridge goes through the VPN, with the kill switch outside the apps, so nothing inside them can route around it."

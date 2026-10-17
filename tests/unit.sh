@@ -94,6 +94,47 @@ AP_TAKEN=" 53 67 "; D[c1.LISTEN_TCP]="22 80"; D[c2.LISTEN_TCP]="22 8080"
 auto_publish 1; eq "auto publish c1" "$AP_OUT" "22:22 80:80"
 auto_publish 2; eq "auto publish avoids clash" "$AP_OUT" "10022:22 8080:8080"
 
+# ── add containers ──
+# a gateway that already exists gets two more containers: addresses are checked, and only its firewall is rebuilt
+REG_SAVE=$REG; REG=$T/reg_add; mkdir -p "$REG"
+reg_set 701 ROLE client; reg_set 701 IP 10.10.10.30
+V[gw.mode]=reconfig; V[gw.net]=10.10.10.0/24; V[gw.clients]="201 202"   # 201=.10 202=.11 are already behind it
+yes_ "client ip free" v_clientip 10.10.10.20
+yes_ "client ip top of range" v_clientip 10.10.10.99
+no_ "client ip taken in this run" v_clientip 10.10.10.10
+no_ "client ip taken in the registry" v_clientip 10.10.10.30
+no_ "client ip is the gateway" v_clientip 10.10.10.1
+no_ "client ip below the range" v_clientip 10.10.10.9
+no_ "client ip in the DHCP range" v_clientip 10.10.10.100
+no_ "client ip on another network" v_clientip 10.10.11.20
+no_ "client ip not an address" v_clientip 10.10.10.256
+v_clientip 10.10.10.10 >/dev/null; has "client ip message names the owner" "$VERR" "CT 201"
+REG=$REG_SAVE
+
+# which containers can be added: not the gateway, not a tunnel container, not one already behind a gateway
+REG_SAVE=$REG; REG=$T/reg_add2; mkdir -p "$REG"
+reg_set 701 ROLE client; reg_set 702 ROLE tunnel; reg_set 700 ROLE gateway
+out=$(ct_ids() { echo "700 701 702 703 704"; }; ct_name() { echo "n$1"; }; ct_status() { echo running; }; ac_items 700)
+has "add list offers a plain container" "$out" "703|703 n703|running · vmbr0 · dhcp|0"
+has "add list offers another one" "$out" "704|704 n704|"
+lacks "add list skips the gateway itself" "$out" "700|"
+lacks "add list skips a container already behind a gateway" "$out" "701|"
+lacks "add list skips a container with its own tunnel" "$out" "702|"
+REG=$REG_SAVE
+
+# the firewall-only rebuild: the new container is added, the old ones stay, and no VPN config is written
+V[gw.mode]=reconfig; V[gw.clients]="201 202 203"; V[c203.ip]=10.10.10.12; V[c203.publish]="7474:7474"
+FW_ONLY=1 stage_gateway "$T/o_add"
+add=$(cat "$T/o_add/vpnguard.nft")
+has "add: new container is published" "$add" 'tcp dport 7474 dnat ip to 10.10.10.12:7474'
+has "add: existing container keeps its ports" "$add" 'tcp dport 2222 dnat ip to 10.10.10.10:22'
+has "add: existing container keeps its ports (2)" "$add" 'tcp dport 9696 dnat ip to 10.10.10.11:9696'
+eq "add: no VPN config files rewritten" "$(find "$T/o_add" -name 'slot-*' | wc -l)" 0
+has "add: apply.env says firewall only" "$(cat "$T/o_add/apply.env")" "FW_ONLY=1"
+has "add: PVM settings still list the VPN endpoints" "$(cat "$T/o_add/vpnguard.env")" "ENDPOINTS="
+if command -v nft >/dev/null && nft -c -f /dev/null 2>/dev/null; then nft -c -f "$T/o_add/vpnguard.nft" && ok || bad "nft check add"; fi
+V[gw.clients]="201 202"
+
 # ── template architecture (never pick another CPU's build) ──
 list=$'system  debian-13-standard_13.6-1_amd64.tar.zst  amd64\nsystem  debian-13-standard_13.6-1_arm64.tar.zst  arm64'
 pick=$(awk '{print $2}' <<<"$list" | grep -E "^debian-13-standard_.*_amd64\.tar" | sort -V | tail -n 1)

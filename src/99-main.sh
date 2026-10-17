@@ -15,6 +15,7 @@ main_menu() {
         pick m "What now?" "${LAST_CHOICE:-tunnel}" \
             "tunnel|Protect containers|each one gets its own VPN" \
             "gateway|VPN gateways|named gateways: one VPN for many containers, on a private bridge" \
+            "add|Add containers|put more containers behind a gateway you already have, no VPN questions" \
             "ports|Port forwarding|what the VPN forwards in, and what your home network can reach" \
             "live|Live dashboard|auto-refreshing view of everything" \
             "status|Check a container|full leak and kill-switch test" \
@@ -29,6 +30,7 @@ main_menu() {
         case $m in
             tunnel)   V=(); D=(); tunnel_wizard ;;
             gateway)  V=(); D=(); gateway_wizard ;;
+            add)      V=(); D=(); add_containers_screen ;;
             status)   status_screen ;;
             ports)    port_screen ;;
             live)     live_screen ;;
