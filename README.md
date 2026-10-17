@@ -39,6 +39,7 @@ Both modes ask **Express** (default: just the VPN config and, for a gateway, a n
 * Everything else leaves only through the tunnel. IPv6 is blocked. If the tunnel drops, traffic stops instead of leaking.
 * The kill switch loads before the network and survives reboots. A watchdog restarts the tunnel, fails over to a backup config, and tells you (ntfy / Gotify).
 * **Port forwarding menu**, per gateway: the port your provider forwards (NAT-PMP or fixed) and which container gets it, plus which container ports your home network can reach. qBittorrent's listening port is kept in sync. Changes reload the firewall only; the VPN stays connected.
+* **Adding a VPN config is like editing a file in nano.** Choose "Paste it": a real nano opens, you paste or type the config, then Ctrl+X, Y, Enter. Keys are hidden in what PVM shows afterwards, and nano leaves nothing in your scrollback. Without nano it falls back to a simple line-by-line paste.
 * Apps like qBittorrent or the *arr suite can optionally be stopped while the VPN is down and started again when it's back (a yes/no per container).
 
 ## Use

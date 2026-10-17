@@ -31,6 +31,7 @@ screens = []; out, dead = drain(8); screens.append(("start", out))
 for it in args:
     if dead: break
     it = it.replace("\\e", "\x1b")
+    it = re.sub(r"\\x([0-9a-fA-F]{2})", lambda m: chr(int(m.group(1), 16)), it)   # e.g. \x18 = Ctrl-X
     if it in KEYS: os.write(fd, KEYS[it].encode())
     elif it.startswith("~"): os.write(fd, it[1:].encode())
     else: os.write(fd, (it + "\n").encode())

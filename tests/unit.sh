@@ -172,5 +172,12 @@ eq "end of input"        "$(pb "$CFGP"$'\n')" "0 PersistentKeepalive = 25"
 eq "q cancels"           "$(pb $'q\n')" "1 "
 [ "$(pb "$CFGP"$'\n\n\n' | cut -c1)" = 0 ] && ok || bad "two empty lines should finish a paste"
 
+
+# ── the nano-style editor falls back to line paste without a terminal ──
+shown=$(printf 'Address = 10.0.0.2/32\nEND\n' | PVM_EDITOR=definitely-not-installed NO_COLOR=1 paste_block "$T/ed.conf")
+has "no editor/terminal: line paste is used" "$shown" "received 1 lines"
+mask_reset; mask_line "PrivateKey = abc="; has "mask_line hides keys" "$MASK_SHOWN" "hidden"
+mask_reset; mask_line "<key>"; mask_line "SECRET"; eq "mask_line hides block content" "$MASK_HIDE" 1
+
 echo "passed $pass, failed $failn"
 [ "$failn" = 0 ]

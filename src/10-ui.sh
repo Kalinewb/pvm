@@ -581,15 +581,33 @@ yn() {
 }
 
 # paste_block FILE : read a pasted block silently until a line "END" or Ctrl-D
-paste_block() {
-    local f=$1 line tl count=0 inblk="" blkn=0 shown low blank=0 finish=0 cancelled=0
+# mask_line LINE : what may be shown of one config line. Keys, passwords and inline <key>/<ca>... blocks are hidden.
+M_INBLK=""; M_BLKN=0; MASK_SHOWN=""; MASK_HIDE=0
+mask_reset() { M_INBLK=""; M_BLKN=0; }
+mask_line() {
+    local line=${1//[[:cntrl:]]/} low
+    low=${line,,}; MASK_SHOWN=$line; MASK_HIDE=0
+    if [ -n "$M_INBLK" ]; then                                   # inside <key>...</key>, <ca>... : count, don't print
+        if [[ $low =~ ^[[:space:]]*\</${M_INBLK,,}\> ]]; then MASK_SHOWN="</$M_INBLK>   ${GR}($M_BLKN lines hidden)${R}"; M_INBLK=""
+        else M_BLKN=$((M_BLKN + 1)); MASK_HIDE=1; fi
+    elif [[ $line =~ ^[[:space:]]*\<([A-Za-z0-9-]+)\>[[:space:]]*$ ]]; then
+        M_INBLK=${BASH_REMATCH[1]}; M_BLKN=0; MASK_SHOWN="<$M_INBLK>"
+    elif [[ $low =~ ^[[:space:]]*(privatekey|presharedkey|auth-user-pass-secret|password)[[:space:]]*[=\ ] ]]; then
+        MASK_SHOWN="${line%%[=\ ]*} = ${GR}●●●●●●●●●●●●●●●● (hidden)${R}"
+    fi
+    [ "${#MASK_SHOWN}" -gt $((W - 10)) ] && MASK_SHOWN="${MASK_SHOWN:0:$((W - 13))}..."
+    return 0
+}
+
+paste_lines() {   # the fallback: lines typed or pasted one by one, until END
+    local f=$1 line tl count=0 blank=0 finish=0 cancelled=0
     : > "$f"
     printf '    %sPaste the whole config now. When it has all arrived, finish with any of these:%s\n' "$GR" "$R"
     printf '      %s· type %sEND%s%s (any capitals) and press Enter, even straight after the last line%s\n' "$GR" "$WH$B" "$R" "$GR" "$R"
     printf '      %s· or press Enter twice%s     %s· or Ctrl-D%s     %s· or type %sq%s%s and Enter to cancel%s\n' "$GR" "$R" "$GR" "$R" "$GR" "$WH$B" "$R" "$GR" "$R"
     printf '    %sYou will see what arrives. Keys and passwords are hidden, so they never sit in your scrollback.%s\n\n' "$GR" "$R"
     statusbar "paste the config   then END, or Enter twice, or Ctrl-D   (q = cancel)"
-    cur_hide
+    cur_hide; mask_reset
     while IFS= read -rs line; do
         line=${line//$'\e[200~'/}; line=${line//$'\e[201~'/}; line=${line%$'\r'}
         tl=$(trim "$line")
@@ -603,22 +621,44 @@ paste_block() {
         else blank=0; fi
         printf '%s\n' "$line" >> "$f"
         count=$((count + 1))
-        # what to show: the line as it is, except secrets
-        line=${line//[[:cntrl:]]/}; low=${line,,}; shown=$line
-        if [ -n "$inblk" ]; then                                 # inside <key>...</key>, <ca>... : count, don't print
-            if [[ $low =~ ^[[:space:]]*\</${inblk,,}\> ]]; then shown="</$inblk>   ${GR}($blkn lines hidden)${R}"; inblk=""
-            else blkn=$((blkn + 1)); [ "$finish" = 1 ] && break; continue; fi
-        elif [[ $line =~ ^[[:space:]]*\<([A-Za-z0-9-]+)\>[[:space:]]*$ ]]; then
-            inblk=${BASH_REMATCH[1]}; blkn=0; shown="<$inblk>"
-        elif [[ $low =~ ^[[:space:]]*(privatekey|presharedkey|auth-user-pass-secret|password)[[:space:]]*[=\ ] ]]; then
-            shown="${line%%[=\ ]*} = ${GR}●●●●●●●●●●●●●●●● (hidden)${R}"
-        fi
-        [ "${#shown}" -gt $((W - 10)) ] && shown="${shown:0:$((W - 13))}..."
-        printf '    %s%3d%s  %s\n' "$DG" "$count" "$R" "$shown"
+        mask_line "$line"
+        if [ "$MASK_HIDE" = 0 ]; then printf '    %s%3d%s  %s\n' "$DG" "$count" "$R" "$MASK_SHOWN"; fi
         [ "$finish" = 1 ] && break
     done
     cur_show
     if [ "$cancelled" = 1 ]; then printf '\n    %scancelled%s\n' "$GR" "$R"; return 1; fi
+    printf '\n    %s✔%s received %s lines\n' "$OK" "$R" "$count"
+    [ "$count" -gt 0 ]
+}
+
+# paste_block FILE : a real editor (nano) to paste or type the config into, like editing any file; saves with Ctrl+X, Y, Enter.
+# Without nano (or on a pipe) it falls back to the line-by-line paste above. PVM_EDITOR picks another editor.
+paste_block() {
+    local f=$1 ed=${PVM_EDITOR:-nano} dir tmp line count=0 shown=0
+    if [ "$INTERACTIVE" != 1 ] || ! command -v "$ed" >/dev/null 2>&1; then paste_lines "$f"; return; fi
+    dir=$(mktemp -d "${STAGE:-/tmp}/edit.XXXXXX") || { paste_lines "$f"; return; }
+    tmp=$dir/vpn-config.conf
+    cat > "$tmp" <<EOF
+# PVM: paste your WireGuard or OpenVPN config below the empty line.
+# PVM: when you are done press Ctrl+X, then Y, then Enter to save.  Ctrl+X, then N throws it away.
+# PVM: lines starting with "# PVM:" are removed again, so you can leave them.
+
+EOF
+    screen_leave; cur_show
+    ( cd "$dir" && "$ed" -w -l +4 vpn-config.conf )   # nano: no wrapping of long lines, line numbers, cursor on the empty line; the title shows a short name
+    screen_enter; cls
+    grep -v '^# PVM:' "$tmp" | tr -d '\r' > "$f"; rm -rf "$dir"
+    printf '\n    %sWhat was saved (keys and passwords are hidden here, and the editor left no trace in your scrollback):%s\n\n' "$GR" "$R"
+    mask_reset
+    while IFS= read -r line || [ -n "$line" ]; do
+        count=$((count + 1))
+        mask_line "$line"
+        [ "$MASK_HIDE" = 1 ] && continue
+        [ "$shown" -ge $((ROWS - 12)) ] && continue
+        printf '    %s%3d%s  %s\n' "$DG" "$count" "$R" "$MASK_SHOWN"; shown=$((shown + 1))
+    done < "$f"
+    [ "$shown" -lt "$count" ] && printf '    %s... and more lines%s\n' "$GR" "$R"
+    count=$(grep -c '[^[:space:]]' "$f")
     printf '\n    %s✔%s received %s lines\n' "$OK" "$R" "$count"
     [ "$count" -gt 0 ]
 }
