@@ -23,7 +23,7 @@ set -o pipefail
 umask 077
 export LC_ALL=C.UTF-8
 
-VERSION="3.0.5"
+VERSION="3.0.6"
 BIN_DIR=${PVM_BIN_DIR:-/usr/local/sbin}
 REPO_RAW=${PVM_RAW:-https://raw.githubusercontent.com/Kalinewb/pvm}
 REPO_API=${PVM_API:-https://api.github.com/repos/Kalinewb/pvm}
@@ -1097,13 +1097,17 @@ jar=$(mktemp) || exit 1
 trap 'rm -f "$jar"' EXIT
 opts=(-s -k -m 10 -c "$jar" -b "$jar")
 if [ -n "$QUSER" ]; then
-    r=$(curl "${opts[@]}" --data-urlencode "username=$QUSER" --data-urlencode "password=$QPASS" "$URL/api/v2/auth/login")
-    [ "$r" = "Ok." ] || { echo "qBittorrent login failed (${r:-no answer})" >&2; exit 1; }
+    # older qBittorrent answers 200 "Ok." (wrong login: 200 "Fails."); newer ones answer 204 with no body
+    out=$(mktemp) || exit 1
+    lcode=$(curl "${opts[@]}" -o "$out" -w '%{http_code}' --data-urlencode "username=$QUSER" --data-urlencode "password=$QPASS" "$URL/api/v2/auth/login")
+    r=$(cat "$out"); rm -f "$out"
+    if [ "$lcode" = 204 ] || { [ "$lcode" = 200 ] && [ "$r" = "Ok." ]; }; then :
+    else echo "qBittorrent login failed (HTTP ${lcode:-none}, ${r:-no answer})" >&2; exit 1; fi
 fi
 code=$(curl "${opts[@]}" -o /dev/null -w '%{http_code}' \
     --data-urlencode "json={\"listen_port\":$port,\"upnp\":false,\"random_port\":false}" \
     "$URL/api/v2/app/setPreferences")
-[ "$code" = 200 ] || { echo "qBittorrent refused the new port (HTTP $code)" >&2; exit 1; }
+[ "$code" = 200 ] || [ "$code" = 204 ] || { echo "qBittorrent refused the new port (HTTP $code)" >&2; exit 1; }
 echo "qBittorrent now listens on port $port"
 PVM_PAYLOAD_EOF
 
@@ -3925,13 +3929,12 @@ port_screen() {
         pick a "What now?" "$([ "$PF_CHANGED" = 1 ] && echo apply || echo back)" \
             "ports|Published ports|choose which of a container's ports your home network can reach" \
             "vpn|Port from the VPN|the port your provider forwards, and which container gets it" \
-            "apply|Apply changes|reload the gateway's firewall (the VPN stays connected)" \
+            "apply|Apply / refresh|reload the gateway's firewall and tools (the VPN stays connected)" \
             "back|Back|$([ "$PF_CHANGED" = 1 ] && echo "discard unsaved changes")" || return 0
         case $a in
             ports) pf_edit_published ;;
             vpn)   pf_edit_vpn; [ $? = 2 ] && return 0 ;;
-            apply) [ "$PF_CHANGED" = 1 ] || { note "nothing to apply"; nap 0.8; continue; }
-                   pf_apply && { pf_load_gateway "$g"; } ;;
+            apply) pf_apply && { pf_load_gateway "$g"; } ;;      # also fine with no changes: it refreshes the gateway's scripts, the VPN stays up
             back)  return 0 ;;
         esac
     done

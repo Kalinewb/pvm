@@ -3,6 +3,7 @@
 Login: admin / adminadmin. A setPreferences call is appended to /tmp/qbit-prefs.log."""
 import http.server
 import json
+import os
 import urllib.parse
 
 
@@ -15,11 +16,13 @@ class H(http.server.BaseHTTPRequestHandler):
         body = urllib.parse.parse_qs(self._body())
         if self.path.endswith("/auth/login"):
             ok = body.get("username") == ["admin"] and body.get("password") == ["adminadmin"]
-            self.send_response(200)
+            style204 = os.environ.get("QBIT_STYLE") == "204"
+            self.send_response(204 if (ok and style204) else 200)
             if ok:
                 self.send_header("Set-Cookie", "SID=abc123; path=/")
             self.end_headers()
-            self.wfile.write(b"Ok." if ok else b"Fails.")
+            if not (ok and style204):
+                self.wfile.write(b"Ok." if ok else b"Fails.")
         elif self.path.endswith("/app/setPreferences"):
             if "SID=abc123" not in (self.headers.get("Cookie") or ""):
                 self.send_response(403)
@@ -38,4 +41,4 @@ class H(http.server.BaseHTTPRequestHandler):
         pass
 
 
-http.server.HTTPServer(("0.0.0.0", 8080), H).serve_forever()
+http.server.HTTPServer(("0.0.0.0", int(os.environ.get("QBIT_PORT", "8080"))), H).serve_forever()

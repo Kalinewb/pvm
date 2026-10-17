@@ -132,13 +132,12 @@ port_screen() {
         pick a "What now?" "$([ "$PF_CHANGED" = 1 ] && echo apply || echo back)" \
             "ports|Published ports|choose which of a container's ports your home network can reach" \
             "vpn|Port from the VPN|the port your provider forwards, and which container gets it" \
-            "apply|Apply changes|reload the gateway's firewall (the VPN stays connected)" \
+            "apply|Apply / refresh|reload the gateway's firewall and tools (the VPN stays connected)" \
             "back|Back|$([ "$PF_CHANGED" = 1 ] && echo "discard unsaved changes")" || return 0
         case $a in
             ports) pf_edit_published ;;
             vpn)   pf_edit_vpn; [ $? = 2 ] && return 0 ;;
-            apply) [ "$PF_CHANGED" = 1 ] || { note "nothing to apply"; nap 0.8; continue; }
-                   pf_apply && { pf_load_gateway "$g"; } ;;
+            apply) pf_apply && { pf_load_gateway "$g"; } ;;      # also fine with no changes: it refreshes the gateway's scripts, the VPN stays up
             back)  return 0 ;;
         esac
     done

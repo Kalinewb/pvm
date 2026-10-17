@@ -11,11 +11,15 @@ jar=$(mktemp) || exit 1
 trap 'rm -f "$jar"' EXIT
 opts=(-s -k -m 10 -c "$jar" -b "$jar")
 if [ -n "$QUSER" ]; then
-    r=$(curl "${opts[@]}" --data-urlencode "username=$QUSER" --data-urlencode "password=$QPASS" "$URL/api/v2/auth/login")
-    [ "$r" = "Ok." ] || { echo "qBittorrent login failed (${r:-no answer})" >&2; exit 1; }
+    # older qBittorrent answers 200 "Ok." (wrong login: 200 "Fails."); newer ones answer 204 with no body
+    out=$(mktemp) || exit 1
+    lcode=$(curl "${opts[@]}" -o "$out" -w '%{http_code}' --data-urlencode "username=$QUSER" --data-urlencode "password=$QPASS" "$URL/api/v2/auth/login")
+    r=$(cat "$out"); rm -f "$out"
+    if [ "$lcode" = 204 ] || { [ "$lcode" = 200 ] && [ "$r" = "Ok." ]; }; then :
+    else echo "qBittorrent login failed (HTTP ${lcode:-none}, ${r:-no answer})" >&2; exit 1; fi
 fi
 code=$(curl "${opts[@]}" -o /dev/null -w '%{http_code}' \
     --data-urlencode "json={\"listen_port\":$port,\"upnp\":false,\"random_port\":false}" \
     "$URL/api/v2/app/setPreferences")
-[ "$code" = 200 ] || { echo "qBittorrent refused the new port (HTTP $code)" >&2; exit 1; }
+[ "$code" = 200 ] || [ "$code" = 204 ] || { echo "qBittorrent refused the new port (HTTP $code)" >&2; exit 1; }
 echo "qBittorrent now listens on port $port"
