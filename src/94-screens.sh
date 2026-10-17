@@ -73,7 +73,7 @@ library_screen() {
                 [ ${#items[@]} -gt 0 ] || continue
                 local del sure
                 echo; pick del "Delete which?" "" "${items[@]}" || continue
-                yn sure "Delete $del for good?" n || continue
+                yn sure "Delete $del? (it is kept in $LIB/.trash)" n || continue
                 [ "$sure" = y ] && lib_delete "$del" && ok "deleted $del" && nap 0.6 ;;
             back) return 0 ;;
         esac

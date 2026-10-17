@@ -145,5 +145,13 @@ eq "all spellings run the same file" "$(readlink -f "$BIN/VPN")" "$(readlink -f 
 eq "someone else's Vpn is untouched" "$(cat "$BIN/Vpn")" "someone else"
 [ -L "$BIN/vpn-lxc" ] && ok || bad "old vpn-lxc command should now be a link"
 
+
+# ── deleting a saved config keeps a copy ──
+cp "$T/wg.conf" "$LIB/gone.conf"; printf 'KIND=wireguard\n' > "$LIB/gone.meta"
+lib_delete gone
+[ ! -e "$LIB/gone.conf" ] && ok || bad "config still listed after delete"
+ls "$LIB/.trash"/gone.*.conf >/dev/null 2>&1 && ok || bad "deleted config was not kept in the trash"
+lib_names | grep -q '^gone$' && bad "trash entry shows up as a saved config" || ok
+
 echo "passed $pass, failed $failn"
 [ "$failn" = 0 ]

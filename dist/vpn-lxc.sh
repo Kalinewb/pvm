@@ -23,7 +23,7 @@ set -o pipefail
 umask 077
 export LC_ALL=C.UTF-8
 
-VERSION="3.0.0"
+VERSION="3.0.1"
 BIN_DIR=${PVM_BIN_DIR:-/usr/local/sbin}
 REPO_RAW=${PVM_RAW:-https://raw.githubusercontent.com/Kalinewb/pvm}
 SELF=$(readlink -f "$0" 2>/dev/null || echo "$0")
@@ -1968,7 +1968,13 @@ lib_save() {   # lib_save NAME SRCFILE KIND PROVIDER ENDPOINTS USER PASS
     if [ -n "${6:-}" ]; then printf '%s\n%s\n' "$6" "$7" > "$LIB/$1.auth"; chmod 600 "$LIB/$1.auth"
     else rm -f "$LIB/$1.auth"; fi
 }
-lib_delete() { rm -f "$LIB/$1.conf" "$LIB/$1.meta" "$LIB/$1.auth"; }
+# deleting moves a config to $LIB/.trash (kept, root-only) instead of erasing its key; empty that folder yourself to really remove it
+lib_delete() {
+    local f t="$LIB/.trash" ts; ts=$(date +%Y%m%d-%H%M%S)
+    install -d -m 700 "$t"
+    for f in conf meta auth; do [ -f "$LIB/$1.$f" ] && mv -f "$LIB/$1.$f" "$t/$1.$ts.$f"; done
+    return 0
+}
 
 key_fp() {   # key_fp FILE : short fingerprint of a WireGuard PrivateKey (never the key itself)
     awk 'tolower($1) == "privatekey" {sub(/^[^=]*=[ \t]*/, ""); print; exit}' "$1" 2>/dev/null | sha256sum | cut -c1-16
@@ -3931,7 +3937,7 @@ library_screen() {
                 [ ${#items[@]} -gt 0 ] || continue
                 local del sure
                 echo; pick del "Delete which?" "" "${items[@]}" || continue
-                yn sure "Delete $del for good?" n || continue
+                yn sure "Delete $del? (it is kept in $LIB/.trash)" n || continue
                 [ "$sure" = y ] && lib_delete "$del" && ok "deleted $del" && nap 0.6 ;;
             back) return 0 ;;
         esac
