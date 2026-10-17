@@ -25,8 +25,8 @@ command -v pct >/dev/null 2>&1 || die "pct not found: run this on the Proxmox ho
 command -v curl >/dev/null 2>&1 || die "curl is needed"
 
 tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
-curl -fsSL "$RAW/vpn-lxc.sh" -o "$tmp/vpn-lxc.sh" || die "could not download $RAW/vpn-lxc.sh"
-curl -fsSL "$RAW/vpn-lxc.sh.sha256" -o "$tmp/vpn-lxc.sh.sha256" || die "could not download the checksum"
+curl -fsSL "$RAW/vpn-lxc.sh?t=$(date +%s)" -o "$tmp/vpn-lxc.sh" || die "could not download $RAW/vpn-lxc.sh"
+curl -fsSL "$RAW/vpn-lxc.sh.sha256?t=$(date +%s)" -o "$tmp/vpn-lxc.sh.sha256" || die "could not download the checksum"
 
 want=$(cut -d' ' -f1 "$tmp/vpn-lxc.sh.sha256")
 have=$(sha256sum "$tmp/vpn-lxc.sh" | cut -d' ' -f1)

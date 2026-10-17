@@ -23,7 +23,7 @@ set -o pipefail
 umask 077
 export LC_ALL=C.UTF-8
 
-VERSION="2.4"
+VERSION="2.4.1"
 REPO_RAW=${VPNLXC_RAW:-https://raw.githubusercontent.com/Kalinewb/vpn-lxc}
 SELF=$(readlink -f "$0" 2>/dev/null || echo "$0")
 ETC=${VPNLXC_ETC:-/etc/vpn-lxc}
@@ -4212,12 +4212,17 @@ update_self() {
     tmp=$(mktemp -d) || die "could not create a temp dir"
     # shellcheck disable=SC2064
     trap "rm -rf '$tmp'" RETURN
-    curl -fsSL -m 60 "$REPO_RAW/$ref/dist/vpn-lxc.sh" -o "$tmp/s" || die "could not download the latest version (no internet, or no such version: $ref)"
-    curl -fsSL -m 30 "$REPO_RAW/$ref/dist/vpn-lxc.sh.sha256" -o "$tmp/s.sha" || die "could not download the checksum"
+    # a changing query string keeps GitHub's cache from handing out an older copy
+    local bust; bust="?t=$(date +%s)"
+    curl -fsSL -m 60 "$REPO_RAW/$ref/dist/vpn-lxc.sh$bust" -o "$tmp/s" || die "could not download the latest version (no internet, or no such version: $ref)"
+    curl -fsSL -m 30 "$REPO_RAW/$ref/dist/vpn-lxc.sh.sha256$bust" -o "$tmp/s.sha" || die "could not download the checksum"
     want=$(cut -d' ' -f1 "$tmp/s.sha"); have=$(sha256sum "$tmp/s" | cut -d' ' -f1)
     [ "$want" = "$have" ] || die "checksum mismatch, nothing was changed"
     head -n 1 "$tmp/s" | grep -q '^#!/bin/bash' && bash -n "$tmp/s" || die "the download is not a valid script, nothing was changed"
     newv=$(sed -n 's/^VERSION="\(.*\)"/\1/p' "$tmp/s" | head -n 1); oldv=$VERSION
+    if [ "$ref" = main ] && [ "$newv" != "$oldv" ] && [ "$(printf '%s\n%s\n' "$newv" "$oldv" | sort -V | head -n 1)" = "$newv" ]; then
+        printf '\n    %s▲%s the published version (%s) is older than yours (%s), so nothing was changed\n\n' "$WA" "$R" "$newv" "$oldv"; return 0
+    fi
     if [ -f "$dest" ] && cmp -s "$tmp/s" "$dest"; then
         printf '\n    %s✔%s already up to date (version %s)\n\n' "$OK" "$R" "$oldv"; return 0
     fi
