@@ -1,0 +1,21 @@
+#!/bin/bash
+# vpnguard-qbit-port <port>: set qBittorrent's listening port through its WebUI API.
+set -u
+port=${1:-}
+[[ $port =~ ^[0-9]+$ ]] || { echo "usage: vpnguard-qbit-port <port>" >&2; exit 2; }
+CRED=/etc/vpnguard/qbit.env
+val() { sed -n "s/^$1=//p" "$CRED" 2>/dev/null | head -n 1; }
+URL=$(val QBIT_URL); URL=${URL:-http://127.0.0.1:8080}
+QUSER=$(val QBIT_USER); QPASS=$(val QBIT_PASS)
+jar=$(mktemp) || exit 1
+trap 'rm -f "$jar"' EXIT
+opts=(-s -k -m 10 -c "$jar" -b "$jar")
+if [ -n "$QUSER" ]; then
+    r=$(curl "${opts[@]}" --data-urlencode "username=$QUSER" --data-urlencode "password=$QPASS" "$URL/api/v2/auth/login")
+    [ "$r" = "Ok." ] || { echo "qBittorrent login failed (${r:-no answer})" >&2; exit 1; }
+fi
+code=$(curl "${opts[@]}" -o /dev/null -w '%{http_code}' \
+    --data-urlencode "json={\"listen_port\":$port,\"upnp\":false,\"random_port\":false}" \
+    "$URL/api/v2/app/setPreferences")
+[ "$code" = 200 ] || { echo "qBittorrent refused the new port (HTTP $code)" >&2; exit 1; }
+echo "qBittorrent now listens on port $port"

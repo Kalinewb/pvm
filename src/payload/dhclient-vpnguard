@@ -1,0 +1,2 @@
+# vpn-lxc.sh: DNS comes from the VPN tunnel, never from the DHCP server on the home network.
+make_resolv_conf() { :; }

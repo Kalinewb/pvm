@@ -1,0 +1,11 @@
+#!/bin/bash
+# OpenVPN route-up hook: use the DNS servers and gateway the server pushed.
+dns=""
+for v in $(compgen -v foreign_option_); do
+    o=${!v}
+    case $o in "dhcp-option DNS "*) dns="$dns ${o#dhcp-option DNS }" ;; esac
+done
+[ -n "${route_vpn_gateway:-}" ] && echo "$route_vpn_gateway" > /run/vpnguard-gw
+# shellcheck disable=SC2086
+/usr/local/sbin/vpnguard-dns $dns
+exit 0

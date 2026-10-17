@@ -1,0 +1,297 @@
+#!/bin/bash
+# vpn-status: tunnel, leak and kill switch check. Installed by vpn-lxc.sh.
+#   vpn-status            full screen
+#   vpn-status --brief    KEY=value summary for the dashboard
+#   vpn-status --health   quick health check for the watchdog (no outside lookups)
+[ -n "$BASH_VERSION" ] || exec bash "$0" "$@"
+
+ENV=/etc/vpnguard/vpnguard.env
+cfg() { sed -n "s/^$1=//p" "$ENV" 2>/dev/null | head -n 1; }
+ROLE=$(cfg ROLE);         ROLE=${ROLE:-tunnel}
+PROTO=$(cfg PROTO);       PROTO=${PROTO:-wireguard}
+VPN_IF=$(cfg VPN_IF);     VPN_IF=${VPN_IF:-wg0}
+UNIT=$(cfg TUNNEL_UNIT);  UNIT=${UNIT:-wg-quick@wg0.service}
+LAN_IF=$(cfg LAN_IF);     LAN_IF=${LAN_IF:-eth0}
+VPN_NET=$(cfg VPN_NET)
+PROVIDER=$(cfg PROVIDER); PROVIDER=${PROVIDER:-vpn}
+HOME_IP=$(cfg HOME_IP)
+APPS=$(cfg APPS)
+PF_MODE=$(cfg PF_MODE);   PF_MODE=${PF_MODE:-none}
+PF_PORT=$(cfg PF_PORT);   PF_TARGET=$(cfg PF_TARGET)
+PUBLISH=$(cfg PUBLISH);   LAN_NET=$(cfg LAN_NET); LAN_TCP=$(cfg LAN_TCP_PORTS)
+LAN_MODE=$(cfg LAN_MODE); LAN_MODE=${LAN_MODE:-ports}
+ACTIVE=$(cat /etc/vpnguard/active-slot 2>/dev/null); ACTIVE=${ACTIVE:-primary}
+HAS_BACKUP=0; [ -f /etc/vpnguard/slots/backup.conf ] && HAS_BACKUP=1
+MAX_AGE=180
+
+# A VPN hop can drop the odd packet; one lost handshake must not read as "no traffic".
+lookup() {   # lookup URL [curl options] : prints the body, tries twice
+    local url=$1 out i; shift
+    for i in 1 2; do
+        out=$(curl -4 -s -m 6 "$@" "$url" 2>/dev/null)
+        if [ -n "$out" ]; then printf '%s' "$out"; return 0; fi
+    done
+    return 1
+}
+jget() {
+    if command -v jq >/dev/null 2>&1; then jq -r --arg k "$1" '.[$k] // empty' 2>/dev/null
+    else grep -o "\"$1\" *: *\"[^\"]*\"" | head -n 1 | cut -d'"' -f4; fi
+}
+hs_age() {
+    local t
+    t=$(wg show "$VPN_IF" latest-handshakes 2>/dev/null | awk 'NR == 1 {print $2}')
+    if [ -n "$t" ] && [ "$t" -gt 0 ] 2>/dev/null; then echo $(( $(date +%s) - t )); else echo -1; fi
+}
+tunnel_up() { systemctl is-active --quiet "$UNIT" && ip link show "$VPN_IF" >/dev/null 2>&1; }
+pf_now() { if [ "$PF_MODE" = natpmp ]; then cat /run/vpnguard-pf-port 2>/dev/null; else echo "$PF_PORT"; fi; }
+bytes() { cat "/sys/class/net/$VPN_IF/statistics/$1" 2>/dev/null || echo 0; }
+route_dev() { ip route get "$1" 2>/dev/null | awk '{for (i = 1; i <= NF; i++) if ($i == "dev") {print $(i+1); exit}}'; }
+
+if [ "${1:-}" = --health ]; then
+    reason=""
+    if ! systemctl is-active --quiet "$UNIT"; then reason="tunnel service not running"
+    elif ! ip link show "$VPN_IF" >/dev/null 2>&1; then reason="$VPN_IF is missing"
+    else
+        timeout 8 getent hosts example.com >/dev/null 2>&1; dns_ok=$?
+        if [ "$PROTO" = wireguard ]; then
+            a=$(hs_age)
+            if [ "$a" -lt 0 ] || [ "$a" -gt "$MAX_AGE" ]; then reason="no fresh handshake"; fi
+        fi
+        [ -z "$reason" ] && [ "$dns_ok" -ne 0 ] && reason="DNS through the tunnel fails"
+    fi
+    if [ -z "$reason" ]; then echo "HEALTH=ok"; else echo "HEALTH=fail"; fi
+    down=""
+    for a in $APPS; do systemctl is-active --quiet "$a" || down="$down $a"; done
+    echo "REASON=$reason"; echo "ACTIVE=$ACTIVE"; echo "HAS_BACKUP=$HAS_BACKUP"; echo "PF_PORT=$(pf_now)"
+    echo "APPS_DOWN=${down# }"; echo "UNIT=$UNIT"
+    exit 0
+fi
+
+if [ "${1:-}" = --brief ]; then
+    up=down; tunnel_up && up=up
+    a=-1; [ "$PROTO" = wireguard ] && a=$(hs_age)
+    json=""; [ "$up" = up ] && json=$(lookup https://ipinfo.io/json)
+    echo "ROLE=$ROLE"; echo "PROVIDER=$PROVIDER"; echo "PROTO=$PROTO"; echo "TUNNEL=$up"; echo "HS_AGE=$a"
+    echo "ACTIVE=$ACTIVE"; echo "HAS_BACKUP=$HAS_BACKUP"; echo "PF_MODE=$PF_MODE"; echo "PF_PORT=$(pf_now)"
+    echo "EXIT_IP=$(printf '%s' "$json" | jget ip)"; echo "CITY=$(printf '%s' "$json" | jget city)"
+    echo "COUNTRY=$(printf '%s' "$json" | jget country)"; echo "RX=$(bytes rx_bytes)"; echo "TX=$(bytes tx_bytes)"
+    exit 0
+fi
+
+# ── full screen ──
+if { [ -t 1 ] || [ "${FORCE_COLOR:-0}" = 1 ]; } && [ -z "${NO_COLOR:-}" ]; then
+    FANCY=1; RESET=$'\e[0m'; BOLD=$'\e[1m'
+    GREEN=$'\e[38;5;84m'; RED=$'\e[38;5;203m'; YELLOW=$'\e[38;5;221m'
+    CYAN=$'\e[38;5;81m'; GREY=$'\e[38;5;244m'; VIOLET=$'\e[38;5;141m'
+else
+    FANCY=0; RESET=""; BOLD=""; GREEN=""; RED=""; YELLOW=""; CYAN=""; GREY=""; VIOLET=""
+fi
+PASS=0; WARN=0; FAIL=0
+TMP=$(mktemp -d) || exit 1
+trap 'rm -rf "$TMP"' EXIT
+
+hr()   { printf '%*s' "$1" '' | sed 's/ /━/g'; }
+dots() { local pad=$((24 - ${#1})); [ "$pad" -lt 2 ] && pad=2; printf '%*s' "$pad" '' | tr ' ' '.'; }
+bar() {
+    local v=$1 m=$2 w=${3:-10} f i s=""
+    [ "$m" -gt 0 ] || m=1
+    f=$(( v * w / m )); [ "$f" -gt "$w" ] && f=$w; [ "$f" -lt 0 ] && f=0
+    for ((i = 0; i < w; i++)); do if [ "$i" -lt "$f" ]; then s+="▰"; else s+="▱"; fi; done
+    printf '%s' "$s"
+}
+section() { printf '\n  %s▌%s %s%s%s\n' "$VIOLET" "$RESET" "$BOLD" "$1" "$RESET"; }
+row() {
+    local state=$1 label=$2 detail=$3 sym col
+    case $state in
+        0) sym="✔"; col=$GREEN;  PASS=$((PASS + 1)) ;;
+        3) sym="▲"; col=$YELLOW; WARN=$((WARN + 1)) ;;
+        *) sym="✘"; col=$RED;    FAIL=$((FAIL + 1)); detail=${4:-$3} ;;
+    esac
+    printf '    %s%s%s %s %s%s%s %s%s%s\n' "$col" "$sym" "$RESET" "$label" "$GREY" "$(dots "$label")" "$RESET" "$col" "$detail" "$RESET"
+}
+info() { printf '    %s◆%s %s %s%s%s %s%s%s\n' "$CYAN" "$RESET" "$1" "$GREY" "$(dots "$1")" "$RESET" "$CYAN" "$2" "$RESET"; }
+spin() {
+    local label=$1 pid=$2 i=0 frames=(⠋ ⠙ ⠹ ⠸ ⠼ ⠴ ⠦ ⠧ ⠇ ⠏)
+    [ "$FANCY" -eq 1 ] || return 0
+    while kill -0 "$pid" 2>/dev/null; do
+        printf '\r    %s%s%s %s%s%s' "$CYAN" "${frames[i % 10]}" "$RESET" "$GREY" "$label" "$RESET"
+        i=$((i + 1)); sleep 0.08
+    done
+    printf '\r\e[K'
+}
+fetch() {   # fetch LABEL FILE curl-args...   (RETRY=1: try again once if empty)
+    local label=$1 out=$2; shift 2
+    { curl -s -m 8 "$@" >"$out" 2>/dev/null
+      if [ "${RETRY:-0}" = 1 ] && [ ! -s "$out" ]; then curl -s -m 8 "$@" >"$out" 2>/dev/null; fi; } &
+    local pid=$!
+    spin "$label" "$pid"
+    wait "$pid"
+}
+human() { awk -v b="$1" 'BEGIN { split("B KiB MiB GiB TiB", u); i = 1; while (b >= 1024 && i < 5) { b /= 1024; i++ } printf "%.2f %s", b, u[i] }'; }
+
+banner() {
+    local colors=(51 45 39 33 27 63) i=0 line
+    echo
+    while IFS= read -r line; do
+        if [ "$FANCY" -eq 1 ]; then printf '   \e[38;5;%sm%s\e[0m\n' "${colors[i]}" "$line"; else printf '   %s\n' "$line"; fi
+        i=$((i + 1))
+    done <<'EOF'
+██╗   ██╗██████╗ ███╗   ██╗
+██║   ██║██╔══██╗████╗  ██║
+██║   ██║██████╔╝██╔██╗ ██║
+╚██╗ ██╔╝██╔═══╝ ██║╚██╗██║
+ ╚████╔╝ ██║     ██║ ╚████║
+  ╚═══╝  ╚═╝     ╚═╝  ╚═══╝
+EOF
+    printf '   %sV P N · L X C   ·   %s · %s · %s%s\n' "$GREY" "$PROVIDER" "$PROTO" "$ROLE" "$RESET"
+    printf '   %s%s  ·  %s%s\n' "$GREY" "$(hostname)" "$(date '+%Y-%m-%d %H:%M:%S')" "$RESET"
+}
+
+[ -f "$ENV" ] || echo "note: $ENV not found, using defaults (was vpn-lxc.sh run on this container?)"
+banner
+RETRY=1 fetch "probing the exit node..." "$TMP/exit" -4 https://ipinfo.io/json
+[ "$PROVIDER" = mullvad ] && RETRY=1 fetch "asking Mullvad..." "$TMP/mullvad" -4 https://am.i.mullvad.net/json
+fetch "testing the kill switch..." "$TMP/leak" -4 -m 5 --interface "$LAN_IF" https://ipinfo.io/ip
+
+section "TUNNEL"
+systemctl is-active --quiet "$UNIT"
+row $? "Service" "${UNIT%.service} running" "${UNIT%.service} not running"
+ip link show "$VPN_IF" &>/dev/null
+row $? "Interface $VPN_IF" "up" "missing"
+if [ "$PROTO" = wireguard ]; then
+    EP=$(wg show "$VPN_IF" endpoints 2>/dev/null | awk 'NR == 1 {print $2}')
+    info "Endpoint" "${EP:-unknown}"
+    AGE=$(hs_age)
+    if [ "$AGE" -ge 0 ] && [ "$AGE" -le "$MAX_AGE" ]; then row 0 "Handshake" "$(bar $((MAX_AGE - AGE)) "$MAX_AGE") ${AGE}s ago"
+    elif [ "$AGE" -ge 0 ]; then row 1 "Handshake" "" "$(bar 0 "$MAX_AGE") stale: ${AGE}s ago"
+    else row 1 "Handshake" "" "never completed"; fi
+else
+    GW=$(cat /run/vpnguard-gw 2>/dev/null)
+    info "VPN gateway" "${GW:-unknown}"
+fi
+if [ "$HAS_BACKUP" = 1 ]; then
+    if [ "$ACTIVE" = primary ]; then info "Config" "primary (backup standing by)"
+    else row 3 "Config" "running on the BACKUP config"; fi
+fi
+
+section "EXIT"
+EXIT_JSON=$(cat "$TMP/exit" 2>/dev/null)
+EXIT_IP=$(printf '%s' "$EXIT_JSON" | jget ip)
+if [ -z "$EXIT_IP" ]; then row 1 "Exit IP" "" "no answer through the tunnel"
+elif [ -n "$HOME_IP" ] && [ "$EXIT_IP" = "$HOME_IP" ]; then row 1 "Exit IP" "" "$EXIT_IP is your HOME IP"
+elif [ -z "$HOME_IP" ]; then row 3 "Exit IP" "$EXIT_IP (home IP unknown, can't compare)"
+else row 0 "Exit IP" "$EXIT_IP · not your home IP"; fi
+if [ "$PROVIDER" = mullvad ]; then
+    grep -Eq '"mullvad_exit_ip" *: *true' "$TMP/mullvad" 2>/dev/null
+    row $? "Mullvad confirms" "this is a Mullvad exit" "Mullvad says this is NOT its exit"
+fi
+CITY=$(printf '%s' "$EXIT_JSON" | jget city); COUNTRY=$(printf '%s' "$EXIT_JSON" | jget country)
+ORG=$(printf '%s' "$EXIT_JSON" | jget org)
+[ -n "$CITY$COUNTRY" ] && info "Location" "${CITY:+$CITY, }$COUNTRY"
+[ -n "$ORG" ] && info "Network" "$ORG"
+
+section "LEAKS"
+V6DEV=$(ip -6 route get 2606:4700:4700::1111 2>/dev/null | awk '{for (i = 1; i <= NF; i++) if ($i == "dev") {print $(i+1); exit}}')
+if [ -z "$V6DEV" ]; then row 0 "IPv6" "no IPv6 route"
+elif curl -6 -s -m 5 https://api6.ipify.org >/dev/null 2>&1; then row 1 "IPv6" "" "LEAK: IPv6 reaches the internet via $V6DEV"
+else row 0 "IPv6" "blocked by the firewall"; fi
+if [ "$ROLE" = gateway ]; then
+    systemctl is-active --quiet dnsmasq
+    row $? "DNS for the VPN net" "dnsmasq running" "dnsmasq not running"
+    for ns in $(sed -n 's/^server=//p' /etc/vpnguard-upstream.conf 2>/dev/null); do
+        dev=$(route_dev "$ns")
+        if [ "$dev" = "$VPN_IF" ]; then row 0 "Upstream DNS" "$ns via $VPN_IF"
+        else row 1 "Upstream DNS" "" "$ns goes via ${dev:-?}, outside the tunnel"; fi
+    done
+else
+    for ns in $(awk '$1 == "nameserver" {print $2}' /etc/resolv.conf 2>/dev/null); do
+        dev=$(route_dev "$ns")
+        if [ "$dev" = "$VPN_IF" ]; then row 0 "DNS resolver" "$ns via $VPN_IF"
+        else row 1 "DNS resolver" "" "$ns goes via ${dev:-?}, outside the tunnel"; fi
+    done
+fi
+timeout 8 getent hosts example.com >/dev/null 2>&1
+row $? "DNS resolution" "working" "lookups failing"
+
+section "KILL SWITCH"
+if nft list chain inet vpnguard output 2>/dev/null | grep -q 'policy drop' \
+   && nft list chain inet vpnguard input 2>/dev/null | grep -q 'policy drop' \
+   && nft list chain inet vpnguard forward 2>/dev/null | grep -q 'policy drop'; then
+    row 0 "Firewall" "default-deny in, out and forward"
+else
+    row 1 "Firewall" "" "vpnguard firewall not loaded"
+fi
+LEAK=$(cat "$TMP/leak" 2>/dev/null)
+if [ -z "$LEAK" ]; then row 0 "Active test" "traffic forced out of $LAN_IF is blocked"
+else row 1 "Active test" "" "LEAK: reachable outside the tunnel as $LEAK"; fi
+LEGACY=$(iptables -S 2>/dev/null | grep -c '^-A')
+[ "${LEGACY:-0}" -gt 0 ] && row 3 "Old iptables rules" "$LEGACY rules still loaded"
+if [ "$ROLE" = gateway ]; then
+    [ "$(cat /proc/sys/net/ipv4/ip_forward 2>/dev/null)" = 1 ]
+    row $? "Routing" "VPN net $VPN_NET can only leave via $VPN_IF" "IP forwarding is off"
+else
+    if [ "$LAN_MODE" = open ]; then info "Home network" "$LAN_NET · full access both ways"
+    elif [ -n "$LAN_NET" ]; then info "Home network" "$LAN_NET → tcp ${LAN_TCP:-none}"; fi
+fi
+
+if [ "$ROLE" = gateway ] && [ -n "$PUBLISH" ]; then
+    section "PUBLISHED TO YOUR LAN"
+    LANIP=$(ip -4 -o addr show dev "$LAN_IF" 2>/dev/null | awk '{split($4, a, "/"); print a[1]; exit}')
+    for p in $PUBLISH; do
+        ext=${p%%:*}; rest=${p#*:}
+        info "${LANIP:-gateway}:$ext" "→ $rest"
+    done
+fi
+
+section "BOOT ORDER"
+[ "$(systemctl is-enabled nftables 2>/dev/null)" = enabled ]
+row $? "Firewall at boot" "loads before the network" "nftables.service not enabled"
+[ "$(systemctl is-enabled "$UNIT" 2>/dev/null)" = enabled ]
+row $? "Tunnel at boot" "${UNIT%.service} enabled" "${UNIT%.service} not enabled"
+if [ "$ROLE" = gateway ]; then
+    [ "$(systemctl is-enabled dnsmasq 2>/dev/null)" = enabled ]
+    row $? "DNS/DHCP at boot" "dnsmasq enabled" "dnsmasq not enabled"
+fi
+for a in $APPS; do
+    state=$(systemctl is-active "$a" 2>/dev/null)
+    if systemctl show -p BindsTo --value "$a" 2>/dev/null | grep -q vpnguard-tunnel.target; then
+        row 0 "${a%.service}" "only runs with the VPN · $state"
+    else
+        row 1 "${a%.service}" "" "not tied to the VPN · $state"
+    fi
+done
+
+if [ "$PF_MODE" != none ]; then
+    section "PORT FORWARDING"
+    if [ "$PF_MODE" = natpmp ]; then
+        systemctl is-active --quiet vpnguard-natpmp
+        row $? "NAT-PMP keepalive" "running" "vpnguard-natpmp not running"
+    fi
+    port=$(pf_now)
+    if [ -z "$port" ]; then
+        row 1 "Forwarded port" "" "none yet"
+    else
+        nft list set inet vpnguard pf_ports 2>/dev/null | grep -qw "$port"
+        row $? "Forwarded port" "$port open on $VPN_IF only" "$port is not open in the firewall"
+        if [ "$ROLE" = gateway ]; then
+            info "Sent on to" "${PF_TARGET:-?}:$port"
+        else
+            if [ -n "$(ss -Hln "( sport = :$port )" 2>/dev/null)" ]; then row 0 "Listening" "an app listens on $port"
+            else row 3 "Listening" "nothing listens on $port yet (fine until you run a torrent client)"; fi
+        fi
+    fi
+fi
+
+section "TRAFFIC"
+info "Through the tunnel" "▼ $(human "$(bytes rx_bytes)")   ▲ $(human "$(bytes tx_bytes)")"
+
+TOTAL=$((PASS + WARN + FAIL))
+echo
+if [ "$FAIL" -eq 0 ]; then C=$GREEN; MSG="✔  ALL SYSTEMS GO  ·  SAFE TO USE"
+else C=$RED; MSG="✘  CHECKS FAILED  ·  DO NOT USE YET"; fi
+printf '  %s┏%s%s\n' "$C" "$(hr 44)" "$RESET"
+printf '  %s┃%s  %s%s%s\n' "$C" "$RESET" "${BOLD}${C}" "$MSG" "$RESET"
+printf '  %s┗%s%s\n' "$C" "$(hr 44)" "$RESET"
+printf '  %s%s  %s/%s passed · %s warning(s) · %s failed · %ss%s\n\n' \
+    "$GREY" "$(bar "$PASS" "$TOTAL")" "$PASS" "$TOTAL" "$WARN" "$FAIL" "$SECONDS" "$RESET"
+[ "$FAIL" -eq 0 ]

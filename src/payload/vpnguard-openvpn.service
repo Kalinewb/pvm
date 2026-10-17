@@ -1,0 +1,17 @@
+[Unit]
+Description=OpenVPN tunnel (vpn-lxc.sh)
+Wants=network-online.target
+After=network-online.target nftables.service
+Requires=nftables.service
+Wants=vpnguard-tunnel.target
+
+[Service]
+Type=notify
+WorkingDirectory=/etc/openvpn/client
+ExecStart=/usr/sbin/openvpn --suppress-timestamps --config /etc/openvpn/client/vpnguard.conf
+Restart=on-failure
+RestartSec=5
+TimeoutStartSec=60
+
+[Install]
+WantedBy=multi-user.target

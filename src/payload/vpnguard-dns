@@ -1,0 +1,29 @@
+#!/bin/bash
+# vpnguard-dns <ip>...  Called when a tunnel comes up (WireGuard PostUp,
+# OpenVPN route-up). Tunnel role: rewrites resolv.conf. Gateway role:
+# points dnsmasq at the VPN's resolvers. Always exits 0.
+ENV=/etc/vpnguard/vpnguard.env
+cfg() { sed -n "s/^$1=//p" "$ENV" 2>/dev/null | head -n 1; }
+ROLE=$(cfg ROLE)
+OVERRIDE=$(cfg DNS_OVERRIDE)
+# shellcheck disable=SC2086
+[ -n "$OVERRIDE" ] && set -- $OVERRIDE
+[ $# -gt 0 ] || exit 0
+printf '%s\n' "$@" > /run/vpnguard-dns
+if [ "$ROLE" = gateway ]; then
+    { for d in "$@"; do echo "server=$d"; done; } > /etc/vpnguard-upstream.conf
+    chmod 644 /etc/vpnguard-upstream.conf   # dnsmasq reads it after dropping root
+    systemctl --no-block reload-or-restart dnsmasq >/dev/null 2>&1
+else
+    search=$(awk '$1 == "search" {$1 = ""; sub(/^ /, ""); print; exit}' /etc/resolv.conf 2>/dev/null)
+    {
+        echo "# --- BEGIN PVE ---"
+        [ -n "$search" ] && echo "search $search"
+        for d in "$@"; do echo "nameserver $d"; done
+        echo "# --- END PVE ---"
+    } > /etc/resolv.conf.vpnguard
+    [ -L /etc/resolv.conf ] && rm -f /etc/resolv.conf
+    mv -f /etc/resolv.conf.vpnguard /etc/resolv.conf
+    chmod 644 /etc/resolv.conf
+fi
+exit 0

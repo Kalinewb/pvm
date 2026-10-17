@@ -1,0 +1,20 @@
+#!/bin/bash
+# vpnguard-switch primary|backup: change which VPN config is active.
+set -u
+slot=${1:-}
+case $slot in primary|backup) ;; *) echo "usage: vpnguard-switch primary|backup" >&2; exit 2 ;; esac
+cfg() { sed -n "s/^$1=//p" /etc/vpnguard/vpnguard.env 2>/dev/null | head -n 1; }
+PROTO=$(cfg PROTO); VPN_IF=$(cfg VPN_IF); UNIT=$(cfg TUNNEL_UNIT)
+src=/etc/vpnguard/slots/$slot.conf
+[ -f "$src" ] || { echo "there is no $slot config" >&2; exit 1; }
+if [ "$PROTO" = openvpn ]; then
+    install -d -m 700 /etc/openvpn/client
+    install -m 600 "$src" /etc/openvpn/client/vpnguard.conf
+else
+    install -d -m 700 /etc/wireguard
+    install -m 600 "$src" "/etc/wireguard/${VPN_IF:-wg0}.conf"
+fi
+echo "$slot" > /etc/vpnguard/active-slot
+rm -f /run/vpnguard-pf-port
+if timeout 75 systemctl restart "$UNIT"; then echo "now using the $slot config"
+else echo "the $slot config did not come up: journalctl -u $UNIT" >&2; exit 1; fi

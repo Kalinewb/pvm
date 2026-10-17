@@ -1,0 +1,13 @@
+[Unit]
+Description=VPN port forwarding keepalive (NAT-PMP, vpn-lxc.sh)
+BindsTo=vpnguard-tunnel.target
+After=vpnguard-tunnel.target
+PartOf=vpnguard-tunnel.target
+
+[Service]
+ExecStart=/usr/local/sbin/vpnguard-natpmp
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

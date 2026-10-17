@@ -1,0 +1,37 @@
+#!/bin/bash
+# vpnguard-natpmp: keeps a NAT-PMP port mapping alive (Proton VPN style),
+# opens it in the firewall and tells qBittorrent when it changes.
+set -u
+cfg() { sed -n "s/^$1=//p" /etc/vpnguard/vpnguard.env 2>/dev/null | head -n 1; }
+STATE=/run/vpnguard-pf-port
+last=""; synced=""
+rm -f "$STATE"
+while true; do
+    GW=$(cfg PF_GATEWAY)
+    [ -z "$GW" ] && GW=$(cat /run/vpnguard-gw 2>/dev/null)
+    GW=${GW:-10.2.0.1}
+    if udp=$(natpmpc -a 1 0 udp 60 -g "$GW" 2>&1) && tcp=$(natpmpc -a 1 0 tcp 60 -g "$GW" 2>&1); then
+        port=$(sed -nE 's/.*Mapped public port ([0-9]+).*/\1/p' <<<"$udp" | head -n 1)
+        tport=$(sed -nE 's/.*Mapped public port ([0-9]+).*/\1/p' <<<"$tcp" | head -n 1)
+        if [ -n "$port" ]; then
+            [ -n "$tport" ] && [ "$tport" != "$port" ] && echo "note: TCP got port $tport, UDP got $port; using $port"
+            nft add element inet vpnguard pf_ports "{ $port }" 2>/dev/null
+            if [ "$port" != "$last" ]; then
+                [ -n "$last" ] && nft delete element inet vpnguard pf_ports "{ $last }" 2>/dev/null
+                echo "$port" > "$STATE"
+                echo "forwarded port is now $port"
+                last=$port
+            fi
+            if [ "$synced" != "$port" ] && [ -f /etc/vpnguard/qbit.env ]; then
+                /usr/local/sbin/vpnguard-qbit-port "$port" && synced=$port
+            fi
+        else
+            echo "unexpected NAT-PMP answer: $udp" >&2
+        fi
+    else
+        echo "NAT-PMP request to $GW failed (tunnel down, or not a port forwarding server?)" >&2
+        sleep 10
+        continue
+    fi
+    sleep 45
+done

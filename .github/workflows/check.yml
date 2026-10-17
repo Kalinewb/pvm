@@ -1,0 +1,12 @@
+name: check
+on: [push, pull_request]
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y shellcheck nftables
+      - run: ./check.sh
+      - name: dist/ is up to date
+        run: ./build.sh /tmp/vpn-lxc.sh && cmp /tmp/vpn-lxc.sh dist/vpn-lxc.sh
+      - run: sudo bash tests/unit.sh dist/vpn-lxc.sh
